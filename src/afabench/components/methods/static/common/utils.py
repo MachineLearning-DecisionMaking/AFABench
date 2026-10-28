@@ -81,7 +81,9 @@ class ConcreteMask(nn.Module):
 
     @override
     def forward(self, x: torch.Tensor, temp: torch.Tensor) -> torch.Tensor:
-        dist = RelaxedOneHotCategorical(temp, logits=self.logits / self.gamma)
+        dist = RelaxedOneHotCategorical(
+            temp, logits=self.logits / self.gamma, validate_args=False
+        )
         sample = dist.rsample([len(x)])
         m = sample.max(dim=1).values
         if self.group_matrix is not None:
