@@ -3,118 +3,24 @@ import torch
 from afabench.components.methods.rl.common.utils import (
     get_1d_identity,
     get_2d_identity,
-    get_feature_set,
     get_image_feature_set,
+    observed_indices,
     resample_invalid_actions,
-    shuffle_feature_set,
 )
 
 
-def test_get_feature_set() -> None:
-    masked_features = torch.tensor(
-        [
-            [3.0, 0.0, 0.0, 2.0],
-            [0.0, 0.0, 0.0, 0.0],
-            [0.0, 4.0, 3.0, 2.0],
-        ]
-    )
+def test_observed_indices() -> None:
     feature_mask = torch.tensor(
-        [
-            [True, False, False, True],
-            [False, False, False, False],
-            [True, True, True, True],
-        ]
+        [[1, 0, 0, 1, 0], [1, 1, 0, 1, 1], [0, 0, 0, 0, 0]], dtype=torch.bool
     )
-    expected_feature_set = torch.tensor(
-        [
-            [
-                [3, 1, 0, 0, 0],
-                [2, 0, 0, 0, 1],
-                [0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0],
-            ],
-            [[0, 0, 0, 0, 0]] * 4,
-            [
-                [0, 1, 0, 0, 0],
-                [4, 0, 1, 0, 0],
-                [3, 0, 0, 1, 0],
-                [2, 0, 0, 0, 1],
-            ],
-        ],
-        dtype=torch.float32,
-    )
-    expected_lengths = torch.tensor([2, 0, 4], dtype=torch.int64)
+    indices, lengths = observed_indices(feature_mask, shuffle=False)
+    assert torch.equal(lengths, torch.tensor([2, 4, 0]))
+    assert torch.equal(indices[0, :2], torch.tensor([0, 3]))
+    assert torch.equal(indices[1], torch.tensor([0, 1, 3, 4]))
 
-    feature_set, lengths = get_feature_set(masked_features, feature_mask)
-    assert torch.equal(feature_set, expected_feature_set)
-    assert torch.equal(lengths, expected_lengths)
-
-
-def test_get_feature_set_matches_loop_reference() -> None:
-    masked_features = torch.tensor(
-        [
-            [0.5, 0.0, -1.5, 0.0, 2.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0, -2.0, 3.0, -4.0, 5.0],
-            [0.0, 0.0, 0.0, 7.0, 0.0],
-        ]
-    )
-    feature_mask = torch.tensor(
-        [
-            [True, False, True, False, True],
-            [False, False, False, False, False],
-            [True, True, True, True, True],
-            [False, False, False, True, False],
-        ]
-    )
-
-    batch_size, n_features = masked_features.shape
-    expected_feature_set = torch.zeros(batch_size, n_features, n_features + 1)
-    expected_lengths = torch.zeros(batch_size, dtype=torch.int64)
-    for i in range(batch_size):
-        observed_indices = feature_mask[i].nonzero(as_tuple=True)[0]
-        n_observed = len(observed_indices)
-        expected_lengths[i] = n_observed
-        expected_feature_set[i, :n_observed, 0] = masked_features[
-            i, observed_indices
-        ]
-        expected_feature_set[i, :n_observed, 1:] = torch.eye(n_features)[
-            observed_indices
-        ]
-
-    feature_set, lengths = get_feature_set(masked_features, feature_mask)
-
-    assert torch.equal(feature_set, expected_feature_set)
-    assert torch.equal(lengths, expected_lengths)
-
-
-def test_shuffle_feature_set_preserves_observed_features() -> None:
-    masked_features = torch.tensor(
-        [[3.0, 0.0, 0.0, 2.0], [0.0, 0.0, 0.0, 0.0]]
-    ).requires_grad_()
-    feature_mask = torch.tensor(
-        [[True, True, False, True], [False, False, False, False]]
-    )
-    feature_set, lengths = get_feature_set(masked_features, feature_mask)
-
-    shuffled = shuffle_feature_set(feature_set, lengths)
-    identities = shuffled[..., 1:]
-    values_by_feature = (shuffled[..., :1] * identities).sum(dim=1)
-
-    assert torch.equal(identities.sum(dim=1), feature_mask.float())
-    assert torch.equal(
-        values_by_feature, masked_features.detach() * feature_mask
-    )
-    valid = torch.arange(feature_set.shape[1]).unsqueeze(
-        0
-    ) < lengths.unsqueeze(1)
-    assert (
-        torch.count_nonzero(shuffled.masked_select(~valid.unsqueeze(-1))) == 0
-    )
-
-    shuffled[..., 0].sum().backward()
-    assert masked_features.grad is not None
-    assert torch.equal(masked_features.grad, feature_mask.float())
+    shuffled, _ = observed_indices(feature_mask, shuffle=True)
+    for row, ordered, n in zip(shuffled, indices, lengths, strict=True):
+        assert torch.equal(row[:n].sort().values, ordered[:n])
 
 
 def test_get_1d_identity() -> None:
