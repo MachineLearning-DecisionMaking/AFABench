@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, final, override
 import torch
 import wandb
 from tensordict import TensorDict, TensorDictBase
+from torch import Tensor
 from torchrl.data import Binary, Categorical, Composite, Unbounded
 from torchrl.envs import EnvBase
 
@@ -237,74 +238,68 @@ class AFAEnv(EnvBase):
 
     @override
     def _step(self, tensordict: TensorDictBase) -> TensorDictBase:
-        batch_numel = tensordict.batch_size.numel()
-        batch_indices = torch.arange(batch_numel, device=tensordict.device)
         action = tensordict["action"]
         stop_mask = action == 0
+        selection = (action - 1).clamp(min=0)
+        proposed_cost = torch.where(
+            stop_mask, 0.0, self.selection_costs[selection]
+        )
 
         # Forced stop, matching the evaluation loop: a selection whose cost
         # would push the accumulated cost past the hard budget is not
         # executed, and the episode ends with the state unchanged.
         forced_stop_mask = torch.zeros_like(stop_mask)
         if self.hard_budget is not None:
-            proposed_cost = torch.zeros_like(tensordict["accumulated_cost"])
-            proposed_cost[~stop_mask] = self.selection_costs[
-                action[~stop_mask] - 1
-            ]
             forced_stop_mask = ~stop_mask & (
                 tensordict["accumulated_cost"] + proposed_cost
                 > self.hard_budget
             )
 
-        # Acquire new features from unmasker for executed selections
+        # Unmask the whole batch and keep the old state where no selection is
+        # executed, so there is no data-dependent indexing or host sync
         executes_selection = ~stop_mask & ~forced_stop_mask
-        new_feature_mask = tensordict["feature_mask"].clone()
-        if executes_selection.any():
-            new_feature_mask[executes_selection] = self.unmask_fn(
-                masked_features=tensordict["masked_features"][
-                    executes_selection
-                ],
-                feature_mask=tensordict["feature_mask"][executes_selection],
-                features=tensordict["features"][executes_selection],
-                afa_selection=(action - 1)[executes_selection].unsqueeze(-1),
-                selection_mask=tensordict["performed_selection_mask"][
-                    executes_selection
-                ],
-                label=tensordict["label"][executes_selection],
-                feature_shape=self.feature_shape,
-            )
+        unmasked = self.unmask_fn(
+            masked_features=tensordict["masked_features"],
+            feature_mask=tensordict["feature_mask"],
+            features=tensordict["features"],
+            afa_selection=selection.unsqueeze(-1),
+            selection_mask=tensordict["performed_selection_mask"],
+            label=tensordict["label"],
+            feature_shape=self.feature_shape,
+        )
+        new_feature_mask = torch.where(
+            executes_selection.view(-1, *[1] * len(self.feature_shape)),
+            unmasked,
+            tensordict["feature_mask"],
+        )
+        new_masked_features = torch.where(
+            new_feature_mask, tensordict["features"], 0.0
+        )
+        new_accumulated_cost = tensordict["accumulated_cost"] + torch.where(
+            executes_selection, proposed_cost, 0.0
+        )
 
-        new_masked_features = tensordict["features"].clone()
-        new_masked_features[~new_feature_mask] = 0.0
+        def mark(mask: Tensor, index: Tensor, value: Tensor) -> Tensor:
+            index = index.unsqueeze(-1)
+            return mask.scatter(-1, index, mask.gather(-1, index) | value)
 
-        # Add up costs
-        new_accumulated_cost = tensordict["accumulated_cost"].clone()
-        new_accumulated_cost[executes_selection] += self.selection_costs[
-            (action - 1)[executes_selection]
-        ]
-
-        # Update masks
-        executes_action = stop_mask | executes_selection
-        new_performed_action_mask = tensordict["performed_action_mask"].clone()
-        new_performed_action_mask[
-            batch_indices[executes_action], action[executes_action]
-        ] = True
-        new_allowed_action_mask = tensordict["allowed_action_mask"].clone()
-        new_performed_selection_mask = tensordict[
-            "performed_selection_mask"
-        ].clone()
-
-        # For executed selections, update selection mask and disable that
-        # action
-        if executes_selection.any():
-            selection_indices = batch_indices[executes_selection]
-            selections = (
-                action[executes_selection] - 1
-            )  # Convert to 0-based selection index
-            new_performed_selection_mask[selection_indices, selections] = True
-            new_allowed_action_mask[
-                selection_indices, action[executes_selection]
-            ] = False
+        new_performed_action_mask = mark(
+            tensordict["performed_action_mask"],
+            action,
+            (stop_mask | executes_selection).unsqueeze(-1),
+        )
+        new_performed_selection_mask = mark(
+            tensordict["performed_selection_mask"],
+            selection,
+            executes_selection.unsqueeze(-1),
+        )
+        allowed = tensordict["allowed_action_mask"]
+        index = action.unsqueeze(-1)
+        new_allowed_action_mask = allowed.scatter(
+            -1,
+            index,
+            allowed.gather(-1, index) & ~executes_selection.unsqueeze(-1),
+        )
 
         # If stop action is not allowed, ensure it stays disabled
         if not self.allow_stop_action:
