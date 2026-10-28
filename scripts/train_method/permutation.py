@@ -28,6 +28,10 @@ from afabench.components.methods.static.pt.static_methods import (
 from afabench.components.methods.static.pt.utils import transform_dataset
 from afabench.fit.run import fit_run, save_result
 from afabench.fit.smoke_test import limit
+from afabench.fit.tensor_batches import (
+    TensorBatchDataset,
+    passthrough_batch,
+)
 
 log = logging.getLogger(__name__)
 
@@ -118,14 +122,18 @@ def main(cfg: PermutationTrainingConfig) -> None:
                 val_dataset, selected_features.copy()
             )
             train_subset_loader = DataLoader(
-                train_subset,
+                TensorBatchDataset(*train_subset.tensors),
+                collate_fn=passthrough_batch,
                 batch_size=128,
                 shuffle=True,
                 pin_memory=True,
                 drop_last=True,
             )
             val_subset_loader = DataLoader(
-                val_subset, batch_size=1024, pin_memory=True
+                TensorBatchDataset(*val_subset.tensors),
+                collate_fn=passthrough_batch,
+                batch_size=1024,
+                pin_memory=True,
             )
 
             model = MLP(
