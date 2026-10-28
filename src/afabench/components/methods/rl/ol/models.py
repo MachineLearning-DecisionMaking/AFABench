@@ -175,25 +175,20 @@ class OLPQModule(nn.Module):
         feature_mask: FeatureMask | None = None,
     ) -> torch.Tensor:
         """Calculate the confidence histogram for each class given a sample."""
-        masked_features_rep = self._repeat_batch(
-            masked_features, mcdrop_samples
-        )
-        if feature_mask is not None:
-            feature_mask_rep = self._repeat_batch(feature_mask, mcdrop_samples)
-        else:
-            feature_mask_rep = None
+        x = self._maybe_concatenate(masked_features, feature_mask)
         # MC dropout is the point of this method, and the OL trainer holds the
         # model in eval mode while computing rewards, so ask for it explicitly.
-        class_logits, _qvalues = self.forward(
-            masked_features_rep, feature_mask_rep, mc_dropout=True
-        )  # class_logits.shape = (batch_size*mcdrop_samples, n_classes)
-        class_logits = class_logits.view(
+        # The first layer precedes dropout, so it is shared by all MC samples.
+        act_last = self._repeat_batch(self.layers_p[0](x), mcdrop_samples)
+        act_last = self._dropout(F.relu(act_last), mc_dropout=True)
+        for f_layer in self.layers_p[1:-1]:
+            act_last = self._dropout(
+                F.relu(f_layer(act_last)), mc_dropout=True
+            )
+        class_logits = self.layers_p[-1](act_last).view(
             masked_features.shape[0], mcdrop_samples, -1
-        )  # (batch_size, mcdrop_samples, n_classes)
-        class_probabilities = class_logits.softmax(
-            dim=-1
-        )  # (batch_size, mcdrop_samples, n_classes)
-        return class_probabilities.mean(dim=1)  # (batch_size, n_classes)
+        )
+        return class_logits.softmax(dim=-1).mean(dim=1)
 
     def predict(
         self,
