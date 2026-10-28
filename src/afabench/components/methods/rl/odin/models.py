@@ -19,6 +19,7 @@ from afabench.core.types import (
     MaskedFeatures,
 )
 from afabench.core.utils import flatten_afa_input
+from afabench.fit.step_logging import epoch_means, should_log_step
 
 
 class PointNetType(Enum):
@@ -306,7 +307,9 @@ class ODINPretrainingModel(pl.LightningModule):
         ).item() * (
             self.max_masking_probability - self.min_masking_probability
         )
-        self.log("masking_probability", masking_probability, sync_dist=True)
+        log_step = should_log_step(self)
+        if log_step:
+            self.log("masking_probability", masking_probability)
 
         augmented_masked_features, augmented_feature_mask, _ = mask_data(
             augmented_features, p=masking_probability
@@ -321,14 +324,12 @@ class ODINPretrainingModel(pl.LightningModule):
             )
         )
 
-        self.log(
-            "feature_norm",
-            (features**2).sum(dim=-1).mean(0).sqrt(),
-        )
-        self.log(
-            "estimated_feature_norm",
-            (estimated_features**2).sum(dim=-1).mean(0).sqrt(),
-        )
+        if log_step:
+            self.log("feature_norm", (features**2).sum(dim=-1).mean(0).sqrt())
+            self.log(
+                "estimated_feature_norm",
+                (estimated_features**2).sum(dim=-1).mean(0).sqrt(),
+            )
 
         (
             partial_vae_loss,
@@ -337,15 +338,12 @@ class ODINPretrainingModel(pl.LightningModule):
         ) = self.partial_vae_loss_function(
             estimated_features, features, mu, logvar
         )
-        self.log("train_loss_vae", partial_vae_loss, sync_dist=True)
-        self.log(
-            "train_feature_recon_loss_vae",
-            partial_vae_feature_recon_loss,
-            sync_dist=True,
-        )
-        self.log(
-            "train_kl_div_loss_vae", partial_vae_kl_div_loss, sync_dist=True
-        )
+        if log_step:
+            self.log("train_loss_vae", partial_vae_loss)
+            self.log(
+                "train_feature_recon_loss_vae", partial_vae_feature_recon_loss
+            )
+            self.log("train_kl_div_loss_vae", partial_vae_kl_div_loss)
 
         # Pass the encoding through the classifier
         # A bit unclear whether to use z or mu here. Using z should add a bit of regularization
@@ -354,10 +352,10 @@ class ODINPretrainingModel(pl.LightningModule):
             logits, label.float(), weight=self.class_weights.to(logits.device)
         )
         classifier_loss = classifier_loss * self.classifier_loss_scaling_factor
-        self.log("train_loss_classifier", classifier_loss, sync_dist=True)
-
         total_loss = partial_vae_loss + classifier_loss
-        self.log("train_loss", total_loss, sync_dist=True)
+        if log_step:
+            self.log("train_loss_classifier", classifier_loss)
+            self.log("train_loss", total_loss)
 
         return total_loss
 
@@ -412,6 +410,7 @@ class ODINPretrainingModel(pl.LightningModule):
     def validation_step(
         self, batch: tuple[Tensor, Tensor], batch_idx: int
     ) -> None:
+        means = epoch_means(self).start_batch(len(batch[0]))
         augmented_features, features, label = self.shared_step(
             batch=batch, batch_idx=batch_idx
         )
@@ -442,24 +441,24 @@ class ODINPretrainingModel(pl.LightningModule):
             features,
             label,
         )
-        self.log("val_loss_vae_many_observations", loss_vae_many_observations)
-        self.log(
+        means.add("val_loss_vae_many_observations", loss_vae_many_observations)
+        means.add(
             "val_feature_recon_loss_vae_many_observations",
             feature_recon_loss_vae_many_observations,
         )
-        self.log(
+        means.add(
             "val_kl_div_loss_vae_many_observations",
             kl_div_loss_vae_many_observations,
         )
-        self.log(
+        means.add(
             "val_loss_classifier_many_observations",
             loss_classifier_many_observations,
         )
-        self.log(
+        means.add(
             "val_loss_many_observations",
             loss_vae_many_observations + loss_classifier_many_observations,
         )
-        self.log("val_acc_many_observations", acc_many_observations)
+        means.add("val_acc_many_observations", acc_many_observations)
 
         # Mask features with maximum probability -> see few features (observations)
         augmented_feature_mask_few_observations = (
@@ -485,27 +484,31 @@ class ODINPretrainingModel(pl.LightningModule):
             features,
             label,
         )
-        self.log("val_loss_vae_few_observations", loss_vae_few_observations)
-        self.log(
+        means.add("val_loss_vae_few_observations", loss_vae_few_observations)
+        means.add(
             "val_feature_recon_loss_vae_few_observations",
             feature_recon_loss_vae_few_observations,
         )
-        self.log(
+        means.add(
             "val_kl_div_loss_vae_few_observations",
             kl_div_loss_vae_few_observations,
         )
-        self.log(
+        means.add(
             "val_loss_classifier_few_observations",
             loss_classifier_few_observations,
         )
-        self.log(
+        means.add(
             "val_loss_few_observations",
             loss_vae_few_observations + loss_classifier_few_observations,
         )
-        self.log("val_acc_few_observations", acc_few_observations)
+        means.add("val_acc_few_observations", acc_few_observations)
 
         # if self.verbose:
         #     self.verbose_log()
+
+    @override
+    def on_validation_epoch_end(self) -> None:
+        epoch_means(self).log(self)
 
     def partial_vae_loss_function(
         self,
@@ -533,6 +536,10 @@ class ODINPretrainingModel(pl.LightningModule):
             feature_recon_loss,
             kl_div_loss,
         )
+
+    @override
+    def on_fit_start(self) -> None:
+        self.class_weights = self.class_weights.to(self.device)
 
     @override
     def configure_optimizers(self) -> torch.optim.Optimizer:
