@@ -161,7 +161,7 @@ class DifferentiableSelector(nn.Module):
             for epoch in range(nepochs):
                 # Switch model to training mode.
                 model.train()
-                epoch_train_loss = 0.0
+                epoch_train_loss = torch.zeros((), device=device)
                 train_batches = 0
 
                 for x_batch, y_batch in train_loader:
@@ -182,9 +182,9 @@ class DifferentiableSelector(nn.Module):
                     opt.step()
                     model.zero_grad()
                     selector_layer.zero_grad()
-                    epoch_train_loss += loss.item()
+                    epoch_train_loss += loss.detach()
 
-                train_loss = epoch_train_loss / train_batches
+                train_loss = epoch_train_loss.item() / train_batches
 
                 # Reinitialize logits as necessary.
                 logits = selector_layer.logits
