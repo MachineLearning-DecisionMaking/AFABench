@@ -110,50 +110,37 @@ class PointNet(nn.Module):
             f"Expected feature_mask to have {self.n_features} features, but got {feature_mask.shape[1]}"
         )
 
+        # Mask out the unobserved features and sum over the set
+        return (
+            self.element_maps(masked_features) * feature_mask.unsqueeze(-1)
+        ).sum(dim=-2)
+
+    def element_maps(
+        self, masked_features: Float[Tensor, "*batch n_features"]
+    ) -> Float[Tensor, "*batch n_features feature_map_size"]:
+        """Feature map h(s_j) of every element j, before masking and pooling."""
         # Identity is a learnable embedding according to EDDI paper
         # Embed each feature once; duplicate max-norm embedding indices make
         # CUDA renormalisation and gradient accumulation nondeterministic.
-        identity = (
-            self.embedding_net(
-                torch.arange(
-                    masked_features.shape[-1], device=masked_features.device
-                )
-            )
-            .unsqueeze(0)
-            .expand(masked_features.shape[0], -1, -1)
+        identity = self.embedding_net(
+            torch.arange(self.n_features, device=masked_features.device)
         )
-
-        # Could not think of a better name than s...
         if self.pointnet_type == PointNetType.POINTNETPLUS:
             # PointNetPlus does pointwise-multiplication between each identity vector and feature value
-            s = (
-                masked_features.unsqueeze(-1) * identity
-            )  # Shape: (batch_size, n_features, identity_size)
+            s = masked_features.unsqueeze(-1) * identity
         elif self.pointnet_type == PointNetType.POINTNET:
             # Normal PointNet concatenates feature value with identity vector
             s = torch.cat(
-                [masked_features.unsqueeze(-1), identity], dim=-1
-            )  # Shape: (batch_size, n_features, identity_size + 1)
+                [
+                    masked_features.unsqueeze(-1),
+                    identity.expand(*masked_features.shape, -1),
+                ],
+                dim=-1,
+            )
         else:
             msg = f"Unknown PointNet type: {self.pointnet_type}"
             raise ValueError(msg)
-
-        # Pass s through the feature map encoder (h)
-        feature_maps = self.feature_map_encoder(
-            s
-        )  # Shape: (batch_size, n_features, feature_map_size)
-
-        # Mask out the unobserved features with zeros
-        feature_maps = feature_maps * feature_mask.unsqueeze(
-            -1
-        )  # Shape: (batch_size, n_features, feature_map_size)
-
-        # Sum over n_features dimension
-        encoding = torch.sum(
-            feature_maps, dim=-2
-        )  # Shape: (batch_size, feature_map_size)
-
-        return encoding
+        return self.feature_map_encoder(s)
 
 
 @final

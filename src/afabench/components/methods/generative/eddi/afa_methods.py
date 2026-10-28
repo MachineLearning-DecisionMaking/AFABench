@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Self, cast, override
+from typing import TYPE_CHECKING, Self, cast, override
 
 import torch
 from torch import nn
@@ -19,6 +19,9 @@ from afabench.core.types import (
 from afabench.core.utils import flatten_afa_input
 
 _SUPPORTED_CLASSIFIER_OUTPUT_KINDS = ("logits", "probabilities")
+
+if TYPE_CHECKING:
+    from afabench.components.methods.rl.odin.models import PartialVAE
 
 
 def _flat_feature_shape(n_features: int) -> torch.Size:
@@ -307,51 +310,38 @@ class EDDIAFAMethod(AFAMethodBase):
             device=device,
         )
 
-        # feature_indices = torch.eye(
-        #     F, device=device, dtype=torch.bool
-        # )
-        mask_features_all = feature_mask.bool().unsqueeze(
-            1
-        ) | add_masks.unsqueeze(0)
-        mask_features_flat = mask_features_all.reshape(
-            batch_size * n_sel, n_features
-        ).to(feature_mask.dtype)
-        mask_label_all = zeros_mask.unsqueeze(1).expand(batch_size, n_sel, -1)
-        mask_label_flat = mask_label_all.reshape(
-            batch_size * n_sel, self.num_classes
-        )
-        # (B*n_sel, (F+num_classes))
-        mask_tests = torch.cat([mask_features_flat, mask_label_flat], dim=1)
-        # (S*B*n_sel, (F+num_classes))
-        mask_tests_rep = (
-            mask_tests.unsqueeze(0)
-            .expand(n_mc_samples, -1, -1)
-            .reshape(
-                n_mc_samples * batch_size * n_sel,
-                n_features + self.num_classes,
-            )
-        )
-        x_rep = x_full.unsqueeze(2).expand(
-            n_mc_samples, batch_size, n_sel, n_features + self.num_classes
-        )
-        x_rep = x_rep.reshape(
-            n_mc_samples * batch_size * n_sel, n_features + self.num_classes
-        )
-        x_masks = x_rep * mask_tests_rep
         with torch.no_grad():
             if self.classifier is None:
-                _, _, _, z_all, _ = self.sampler(x_masks, mask_tests_rep)
+                # Encoding of x_O plus x_i is the observed set's pointnet sum
+                # plus the feature maps of the newly added elements.
+                sampler = cast("PartialVAE", self.sampler)
+                pointnet = sampler.pointnet
+                base = pointnet(
+                    augmented_masked_feature, augmented_feature_mask
+                )
+                maps = pointnet.element_maps(x_full)[..., :n_features, :]
+                maps = maps * missing.unsqueeze(-1)
+                sums = base.unsqueeze(1) + torch.einsum(
+                    "if,sbfh->sbih", add_masks.to(maps.dtype), maps
+                )
+                encoding = sampler.encoder(sums.flatten(end_dim=-2))
+                mu, logvar = encoding.chunk(2, dim=-1)
+                z_all = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
                 logits_all = self.predictor(z_all)
                 preds_all = self._logits_to_probs(logits_all).view(
                     n_mc_samples, batch_size * n_sel, -1
                 )
             else:
-                x_masks_raw = x_masks[:, :n_features]
-                mask_tests_raw = mask_tests_rep[:, :n_features]
+                mask_tests = (
+                    feature_mask.bool().unsqueeze(1) | add_masks.unsqueeze(0)
+                ).to(feature_mask.dtype)
+                x_masks_raw = x_full[:, :, None, :n_features] * mask_tests
                 preds_flat = self._external_classifier_probs(
                     self.classifier(
-                        masked_features=x_masks_raw,
-                        feature_mask=mask_tests_raw,
+                        masked_features=x_masks_raw.flatten(end_dim=-2),
+                        feature_mask=mask_tests.expand(
+                            n_mc_samples, -1, -1, -1
+                        ).flatten(end_dim=-2),
                         feature_shape=_flat_feature_shape(n_features),
                     )
                 )
