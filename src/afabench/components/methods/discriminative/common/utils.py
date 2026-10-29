@@ -41,7 +41,7 @@ def make_onehot(x: torch.Tensor) -> torch.Tensor:
 
 def get_entropy(pred: torch.Tensor) -> torch.Tensor:
     """Calculate entropy, assuming logit predictions."""
-    return Categorical(logits=pred).entropy()
+    return Categorical(logits=pred, validate_args=False).entropy()
 
 
 def ind_to_onehot(inds: torch.Tensor, n: int) -> torch.Tensor:
@@ -240,5 +240,7 @@ class ConcreteSelector(nn.Module):
     ) -> torch.Tensor:
         if deterministic:
             return torch.softmax(logits / (self.gamma * temp), dim=-1)
-        dist = RelaxedOneHotCategorical(temp, logits=logits / self.gamma)
+        dist = RelaxedOneHotCategorical(
+            temp, logits=logits / self.gamma, validate_args=False
+        )
         return dist.rsample()

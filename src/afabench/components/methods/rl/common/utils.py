@@ -22,50 +22,19 @@ def remove_module_prefix(state_dict: dict[str, Any]):  # noqa: ANN201
     return {k.replace("module.", ""): v for k, v in state_dict.items()}
 
 
-def get_feature_set(
-    masked_features: torch.Tensor, feature_mask: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert partially observed features and their indices to the set representation, together with the number of observed features for each batch element, expected by the embedder."""
-    batch_size, n_features = masked_features.shape
-
-    observed = feature_mask.bool()
-    lengths = observed.sum(dim=1, dtype=torch.int64)
-    positions = observed.cumsum(dim=1) - 1
-
-    identities = torch.eye(
-        n_features, dtype=torch.float32, device=masked_features.device
-    ).expand(batch_size, -1, -1)
-    elements = torch.cat(
-        (masked_features.float().unsqueeze(-1), identities), dim=-1
-    )
-    elements = elements * observed.unsqueeze(-1)
-
-    feature_set = torch.zeros_like(elements)
-    feature_set.scatter_add_(
-        1,
-        positions.clamp_min(0).unsqueeze(-1).expand(-1, -1, n_features + 1),
-        elements,
-    )
-
-    return feature_set, lengths
-
-
-def shuffle_feature_set(
-    feature_set: FeatureSet, lengths: Tensor
-) -> FeatureSet:
-    """Shuffle a feature set."""
-    batch_size, set_size, element_size = feature_set.shape
-    valid = torch.arange(set_size, device=feature_set.device).unsqueeze(
-        0
-    ) < lengths.unsqueeze(1)
-    keys = torch.rand(
-        batch_size, set_size, device=feature_set.device
-    ).masked_fill(~valid, float("inf"))
-    order = keys.argsort(dim=1)
-    shuffled = feature_set.gather(
-        1, order.unsqueeze(-1).expand(-1, -1, element_size)
-    )
-    return shuffled.masked_fill(~valid.unsqueeze(-1), 0)
+def observed_indices(
+    feature_mask: FeatureMask, *, shuffle: bool = True
+) -> tuple[Integer[Tensor, "batch k"], Integer[Tensor, "batch"]]:  # noqa: F821
+    """Return observed feature indices first (shuffled if `shuffle`), truncated to the largest set in the batch, and the set sizes."""
+    lengths = feature_mask.sum(dim=-1)
+    k = max(int(lengths.max()), 1)
+    order = torch.arange(
+        feature_mask.shape[-1], device=feature_mask.device, dtype=torch.float32
+    ).expand_as(feature_mask)
+    if shuffle:
+        order = torch.rand_like(order)
+    keys = torch.where(feature_mask.bool(), order, order + 2 * order.shape[-1])
+    return keys.argsort(dim=-1)[:, :k], lengths
 
 
 def get_image_feature_set(

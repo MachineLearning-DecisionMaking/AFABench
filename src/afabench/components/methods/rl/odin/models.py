@@ -19,6 +19,7 @@ from afabench.core.types import (
     MaskedFeatures,
 )
 from afabench.core.utils import flatten_afa_input
+from afabench.fit.step_logging import epoch_means, should_log_step
 
 
 class PointNetType(Enum):
@@ -110,50 +111,37 @@ class PointNet(nn.Module):
             f"Expected feature_mask to have {self.n_features} features, but got {feature_mask.shape[1]}"
         )
 
+        # Mask out the unobserved features and sum over the set
+        return (
+            self.element_maps(masked_features) * feature_mask.unsqueeze(-1)
+        ).sum(dim=-2)
+
+    def element_maps(
+        self, masked_features: Float[Tensor, "*batch n_features"]
+    ) -> Float[Tensor, "*batch n_features feature_map_size"]:
+        """Feature map h(s_j) of every element j, before masking and pooling."""
         # Identity is a learnable embedding according to EDDI paper
         # Embed each feature once; duplicate max-norm embedding indices make
         # CUDA renormalisation and gradient accumulation nondeterministic.
-        identity = (
-            self.embedding_net(
-                torch.arange(
-                    masked_features.shape[-1], device=masked_features.device
-                )
-            )
-            .unsqueeze(0)
-            .expand(masked_features.shape[0], -1, -1)
+        identity = self.embedding_net(
+            torch.arange(self.n_features, device=masked_features.device)
         )
-
-        # Could not think of a better name than s...
         if self.pointnet_type == PointNetType.POINTNETPLUS:
             # PointNetPlus does pointwise-multiplication between each identity vector and feature value
-            s = (
-                masked_features.unsqueeze(-1) * identity
-            )  # Shape: (batch_size, n_features, identity_size)
+            s = masked_features.unsqueeze(-1) * identity
         elif self.pointnet_type == PointNetType.POINTNET:
             # Normal PointNet concatenates feature value with identity vector
             s = torch.cat(
-                [masked_features.unsqueeze(-1), identity], dim=-1
-            )  # Shape: (batch_size, n_features, identity_size + 1)
+                [
+                    masked_features.unsqueeze(-1),
+                    identity.expand(*masked_features.shape, -1),
+                ],
+                dim=-1,
+            )
         else:
             msg = f"Unknown PointNet type: {self.pointnet_type}"
             raise ValueError(msg)
-
-        # Pass s through the feature map encoder (h)
-        feature_maps = self.feature_map_encoder(
-            s
-        )  # Shape: (batch_size, n_features, feature_map_size)
-
-        # Mask out the unobserved features with zeros
-        feature_maps = feature_maps * feature_mask.unsqueeze(
-            -1
-        )  # Shape: (batch_size, n_features, feature_map_size)
-
-        # Sum over n_features dimension
-        encoding = torch.sum(
-            feature_maps, dim=-2
-        )  # Shape: (batch_size, feature_map_size)
-
-        return encoding
+        return self.feature_map_encoder(s)
 
 
 @final
@@ -319,7 +307,9 @@ class ODINPretrainingModel(pl.LightningModule):
         ).item() * (
             self.max_masking_probability - self.min_masking_probability
         )
-        self.log("masking_probability", masking_probability, sync_dist=True)
+        log_step = should_log_step(self)
+        if log_step:
+            self.log("masking_probability", masking_probability)
 
         augmented_masked_features, augmented_feature_mask, _ = mask_data(
             augmented_features, p=masking_probability
@@ -334,14 +324,12 @@ class ODINPretrainingModel(pl.LightningModule):
             )
         )
 
-        self.log(
-            "feature_norm",
-            (features**2).sum(dim=-1).mean(0).sqrt(),
-        )
-        self.log(
-            "estimated_feature_norm",
-            (estimated_features**2).sum(dim=-1).mean(0).sqrt(),
-        )
+        if log_step:
+            self.log("feature_norm", (features**2).sum(dim=-1).mean(0).sqrt())
+            self.log(
+                "estimated_feature_norm",
+                (estimated_features**2).sum(dim=-1).mean(0).sqrt(),
+            )
 
         (
             partial_vae_loss,
@@ -350,15 +338,12 @@ class ODINPretrainingModel(pl.LightningModule):
         ) = self.partial_vae_loss_function(
             estimated_features, features, mu, logvar
         )
-        self.log("train_loss_vae", partial_vae_loss, sync_dist=True)
-        self.log(
-            "train_feature_recon_loss_vae",
-            partial_vae_feature_recon_loss,
-            sync_dist=True,
-        )
-        self.log(
-            "train_kl_div_loss_vae", partial_vae_kl_div_loss, sync_dist=True
-        )
+        if log_step:
+            self.log("train_loss_vae", partial_vae_loss)
+            self.log(
+                "train_feature_recon_loss_vae", partial_vae_feature_recon_loss
+            )
+            self.log("train_kl_div_loss_vae", partial_vae_kl_div_loss)
 
         # Pass the encoding through the classifier
         # A bit unclear whether to use z or mu here. Using z should add a bit of regularization
@@ -367,10 +352,10 @@ class ODINPretrainingModel(pl.LightningModule):
             logits, label.float(), weight=self.class_weights.to(logits.device)
         )
         classifier_loss = classifier_loss * self.classifier_loss_scaling_factor
-        self.log("train_loss_classifier", classifier_loss, sync_dist=True)
-
         total_loss = partial_vae_loss + classifier_loss
-        self.log("train_loss", total_loss, sync_dist=True)
+        if log_step:
+            self.log("train_loss_classifier", classifier_loss)
+            self.log("train_loss", total_loss)
 
         return total_loss
 
@@ -425,6 +410,7 @@ class ODINPretrainingModel(pl.LightningModule):
     def validation_step(
         self, batch: tuple[Tensor, Tensor], batch_idx: int
     ) -> None:
+        means = epoch_means(self).start_batch(len(batch[0]))
         augmented_features, features, label = self.shared_step(
             batch=batch, batch_idx=batch_idx
         )
@@ -455,24 +441,24 @@ class ODINPretrainingModel(pl.LightningModule):
             features,
             label,
         )
-        self.log("val_loss_vae_many_observations", loss_vae_many_observations)
-        self.log(
+        means.add("val_loss_vae_many_observations", loss_vae_many_observations)
+        means.add(
             "val_feature_recon_loss_vae_many_observations",
             feature_recon_loss_vae_many_observations,
         )
-        self.log(
+        means.add(
             "val_kl_div_loss_vae_many_observations",
             kl_div_loss_vae_many_observations,
         )
-        self.log(
+        means.add(
             "val_loss_classifier_many_observations",
             loss_classifier_many_observations,
         )
-        self.log(
+        means.add(
             "val_loss_many_observations",
             loss_vae_many_observations + loss_classifier_many_observations,
         )
-        self.log("val_acc_many_observations", acc_many_observations)
+        means.add("val_acc_many_observations", acc_many_observations)
 
         # Mask features with maximum probability -> see few features (observations)
         augmented_feature_mask_few_observations = (
@@ -498,27 +484,31 @@ class ODINPretrainingModel(pl.LightningModule):
             features,
             label,
         )
-        self.log("val_loss_vae_few_observations", loss_vae_few_observations)
-        self.log(
+        means.add("val_loss_vae_few_observations", loss_vae_few_observations)
+        means.add(
             "val_feature_recon_loss_vae_few_observations",
             feature_recon_loss_vae_few_observations,
         )
-        self.log(
+        means.add(
             "val_kl_div_loss_vae_few_observations",
             kl_div_loss_vae_few_observations,
         )
-        self.log(
+        means.add(
             "val_loss_classifier_few_observations",
             loss_classifier_few_observations,
         )
-        self.log(
+        means.add(
             "val_loss_few_observations",
             loss_vae_few_observations + loss_classifier_few_observations,
         )
-        self.log("val_acc_few_observations", acc_few_observations)
+        means.add("val_acc_few_observations", acc_few_observations)
 
         # if self.verbose:
         #     self.verbose_log()
+
+    @override
+    def on_validation_epoch_end(self) -> None:
+        epoch_means(self).log(self)
 
     def partial_vae_loss_function(
         self,
@@ -546,6 +536,10 @@ class ODINPretrainingModel(pl.LightningModule):
             feature_recon_loss,
             kl_div_loss,
         )
+
+    @override
+    def on_fit_start(self) -> None:
+        self.class_weights = self.class_weights.to(self.device)
 
     @override
     def configure_optimizers(self) -> torch.optim.Optimizer:
