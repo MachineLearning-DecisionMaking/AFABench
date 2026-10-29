@@ -2,9 +2,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Self, override
 
-import pandas as pd
+import polars as pl
 import pytest
 import torch
+from polars.testing import assert_frame_equal
 from torch.utils.data import Dataset
 
 from afabench.core.types import (
@@ -142,7 +143,7 @@ def unmask_directly(
     return new_feature_mask
 
 
-def run_eval_after_global_rng_perturbation(seed: int) -> pd.DataFrame:
+def run_eval_after_global_rng_perturbation(seed: int) -> pl.DataFrame:
     method = StochasticDummyMethod()
     method.set_seed(seed)
     torch.rand(100)
@@ -164,7 +165,7 @@ def evaluate_early_stop_method(
     batch_size: int = 3,
     *,
     force_acquisition: bool = False,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     method = StochasticDummyMethod()
     method.set_seed(123)
     return eval_afa_method(
@@ -181,20 +182,14 @@ def evaluate_early_stop_method(
 
 @pytest.mark.parametrize("batch_size", [1, 3])
 def test_early_stop_method_reaches_hard_budget(batch_size: int) -> None:
-    episodes = evaluate_early_stop_method(
-        3, batch_size, force_acquisition=True
-    ).groupby("episode_id")
-    assert episodes["accumulated_cost"].last().tolist() == [3.0] * 5
-    assert (
-        episodes["action_performed"]
-        .apply(
-            lambda actions: (
-                (actions.iloc[:3] > 0).all() and actions.iloc[-1] == 0
-            )
-        )
-        .all()
-    )
-    assert episodes["forced_stop"].last().tolist() == [True] * 5
+    table = evaluate_early_stop_method(3, batch_size, force_acquisition=True)
+    episodes = table.group_by("episode_id").agg(pl.all().last())
+    assert episodes["accumulated_cost"].to_list() == [3.0] * 5
+    for episode in table.partition_by("episode_id"):
+        actions = episode["action_performed"].to_list()
+        assert all(action > 0 for action in actions[:3])
+        assert actions[-1] == 0
+    assert episodes["forced_stop"].to_list() == [True] * 5
 
 
 @pytest.mark.parametrize(
@@ -213,33 +208,37 @@ def test_early_stop_respects_budget_regime(
     *,
     forced_stop: bool,
 ) -> None:
-    episodes = evaluate_early_stop_method(
+    table = evaluate_early_stop_method(
         budget, force_acquisition=budget is not None
-    ).groupby("episode_id")
-    assert episodes["accumulated_cost"].last().tolist() == [expected_cost] * 5
-    assert episodes.size().tolist() == [expected_actions] * 5
-    assert episodes["action_performed"].last().tolist() == [0] * 5
-    assert episodes["forced_stop"].last().tolist() == [forced_stop] * 5
+    )
+    episodes = table.group_by("episode_id").agg(
+        pl.all().last(), pl.len().alias("count")
+    )
+    assert episodes["accumulated_cost"].to_list() == [expected_cost] * 5
+    assert episodes["count"].to_list() == [expected_actions] * 5
+    assert episodes["action_performed"].to_list() == [0] * 5
+    assert episodes["forced_stop"].to_list() == [forced_stop] * 5
 
 
 def test_hard_budget_allows_early_stop_without_forcing() -> None:
-    episodes = evaluate_early_stop_method(3).groupby("episode_id")
-    assert episodes["accumulated_cost"].last().tolist() == [1.0] * 5
-    assert episodes.size().tolist() == [2] * 5
-    assert episodes["action_performed"].last().tolist() == [0] * 5
-    assert episodes["forced_stop"].last().tolist() == [False] * 5
+    episodes = (
+        evaluate_early_stop_method(3)
+        .group_by("episode_id")
+        .agg(pl.all().last(), pl.len().alias("count"))
+    )
+    assert episodes["accumulated_cost"].to_list() == [1.0] * 5
+    assert episodes["count"].to_list() == [2] * 5
+    assert episodes["action_performed"].to_list() == [0] * 5
+    assert episodes["forced_stop"].to_list() == [False] * 5
 
 
 def test_episode_identity_survives_batch_boundaries() -> None:
     result = run_eval_after_global_rng_perturbation(seed=123)
-    assert result["episode_id"].nunique() == 8
-    assert not result.duplicated(["episode_id", "step"]).any()
+    assert result["episode_id"].n_unique() == 8
+    assert not result.select("episode_id", "step").is_duplicated().any()
     assert (
-        result.groupby("episode_id")["step"].apply(list).tolist()
-        == [
-            [0, 1],
-        ]
-        * 8
+        result.group_by("episode_id").agg("step")["step"].to_list()
+        == [[0, 1]] * 8
     )
 
 
@@ -249,7 +248,7 @@ def test_eval_afa_method_is_reproducible_with_seed() -> None:
 
     second = run_eval_after_global_rng_perturbation(seed=123)
 
-    pd.testing.assert_frame_equal(first, second)
+    assert_frame_equal(first, second)
 
 
 def test_eval_afa_method_seed_changes_stochastic_results() -> None:

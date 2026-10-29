@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import ClassVar, final, override
 
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.datasets.miniboone import MiniBooNEDataset
@@ -62,8 +62,10 @@ class MiniBooNESubsetDataset(TabularCSVDataset):
         return MiniBooNEDataset.make_prepared_source()
 
     @override
-    def _read_source(self) -> tuple[pd.DataFrame, pd.Series]:
-        features, labels = MiniBooNEDataset.drop_invalid_rows(
-            *super()._read_source()
+    def _read_source(self) -> pl.DataFrame:
+        frame = MiniBooNEDataset.drop_invalid_rows(super()._read_source())
+        return frame.select(
+            frame.columns[0],
+            *(frame.columns[i + 1] for i in self.FEATURE_COLUMNS),
+            frame.columns[-1],
         )
-        return features.iloc[:, list(self.FEATURE_COLUMNS)].copy(), labels

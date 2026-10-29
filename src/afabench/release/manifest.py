@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import dacite
-import pandas as pd
+import polars as pl
 import pyarrow.parquet as pq
 import yaml
 
@@ -489,9 +489,9 @@ def index_artifacts(output_root: Path) -> ArtifactIndex:
                 tables[category].append((relative, record))
     job_records = load_job_duration_table(output_root)
     job_duration_table = None
-    if not job_records.empty:
+    if not job_records.is_empty():
         buffer = io.BytesIO()
-        job_records.to_parquet(buffer, index=False)
+        job_records.write_parquet(buffer)
         job_duration_table = buffer.getvalue()
     return ArtifactIndex(
         evaluations=_evaluation_entries(output_root, tables),
@@ -506,13 +506,13 @@ def job_duration_table_entry(
 ) -> JobDurationTableEntry | None:
     if index.job_duration_table is None:
         return None
-    smoke_test = pd.read_parquet(
+    smoke_test = pl.read_parquet(
         io.BytesIO(index.job_duration_table), columns=["smoke_test"]
     )["smoke_test"]
     return JobDurationTableEntry(
         size_bytes=len(index.job_duration_table),
         job_records=len(smoke_test),
-        smoke_test=bool(smoke_test.fillna(value=False).any()),
+        smoke_test=bool(smoke_test.fill_null(False).any()),
     )
 
 

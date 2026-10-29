@@ -157,7 +157,7 @@ classifier training, training, evaluation and transformation.
 
 `afabench.core.job_duration_table.load_job_duration_table(source)` loads
 either the table's Parquet file or an output root of loose job records,
-and returns the same pandas DataFrame for both, sorted by
+and returns the same Polars DataFrame for both, sorted by
 `job_record_path`. The
 [`estimate-compute` command](estimate_compute_command.md) loads its job
 durations with it. It raises `UnknownJobRecordVersionError` for a job record
@@ -168,13 +168,13 @@ The first column is `job_record_path`, the path of the row's record relative
 to the output root. Records do not name the initializer or evaluation split,
 and repeated attempts of a job have the same identity, so the path is what
 tells such rows apart. One column per [field](#fields) follows, named and
-ordered as there. Every column is nullable; null is `<NA>`, or `NaT` for
-times.
+ordered as there. Every column is nullable; unknown values are `null`
+(Python `None`).
 
 | Columns | Type |
 | --- | --- |
-| `job_record_path`, `stage`, `name`, `dataset_key`, `exit_status`, `device`, `gpu_model`, `cpu_model`, `host`, `slurm_job_id`, `slurm_cluster`, `code_commit` | `string` |
+| `job_record_path`, `stage`, `name`, `dataset_key`, `exit_status`, `device`, `gpu_model`, `cpu_model`, `host`, `slurm_job_id`, `slurm_cluster`, `code_commit` | `String` |
 | `job_record_version`, `dataset_realization_index`, `pretrain_seed`, `train_seed`, `eval_seed`, `train_hard_budget`, `eval_hard_budget`, `eval_batch_size`, `exit_code`, `cpus`, `gpus`, `time_limit_minutes` | `Int64` |
 | `train_soft_budget_param`, `eval_soft_budget_param`, `job_duration_seconds` | `Float64` |
-| `started_at`, `ended_at` | `datetime64[us, UTC]` |
-| `smoke_test` | `boolean` |
+| `started_at`, `ended_at` | `Datetime(time_unit="us", time_zone="UTC")` |
+| `smoke_test` | `Boolean` |

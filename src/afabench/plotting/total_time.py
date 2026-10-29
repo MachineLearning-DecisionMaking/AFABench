@@ -17,8 +17,8 @@ shows each stage's total.
 from collections.abc import Sequence
 from pathlib import Path
 
-import pandas as pd
 import plotnine as p9
+import polars as pl
 from plotnine import (
     aes,
     coord_flip,
@@ -47,13 +47,13 @@ STAGE_LABELS = {
 
 
 def method_job_durations(
-    table: pd.DataFrame,
+    table: pl.DataFrame,
     *,
     methods: list[str],
     pretrained_models: dict[str, str],
     initializer_tag: str,
     eval_dataset_split: str,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Return the job duration of each completed job of each method.
 
@@ -61,7 +61,7 @@ def method_job_durations(
     from. Columns: afa_method, dataset, stage, time (seconds); a pretraining
     job shared by several methods is a row of each.
     """
-    completed = table.loc[table["exit_status"].eq("completed").fillna(False)]
+    completed = table.filter(pl.col("exit_status") == "completed")
     split_tag = f"eval_split-{eval_dataset_split}/{initializer_tag}"
     method_jobs = []
     for method in methods:
@@ -77,28 +77,19 @@ def method_job_durations(
                 f"{pretrained_models[method]}/"
             )
         for stage, folder in folders.items():
-            jobs = completed.loc[
-                completed["stage"].eq(stage).fillna(False)
-                & completed["job_record_path"].str.startswith(folder)
-            ]
+            jobs = completed.filter(
+                (pl.col("stage") == stage)
+                & pl.col("job_record_path").str.starts_with(folder)
+            )
             method_jobs.append(
-                pd.DataFrame(
-                    {
-                        "afa_method": method,
-                        "dataset": jobs["dataset_key"],
-                        "stage": stage,
-                        "time": jobs["job_duration_seconds"],
-                    }
+                jobs.select(
+                    pl.lit(method).alias("afa_method"),
+                    pl.col("dataset_key").alias("dataset"),
+                    pl.lit(stage).alias("stage"),
+                    pl.col("job_duration_seconds").alias("time"),
                 )
             )
-    return pd.concat(method_jobs, ignore_index=True).astype(
-        {
-            "afa_method": "string",
-            "dataset": "string",
-            "stage": "string",
-            "time": "float64",
-        }
-    )
+    return pl.concat(method_jobs)
 
 
 def common_plot_operations(
@@ -124,34 +115,32 @@ def common_plot_operations(
     )
 
 
-def filter_common_datasets(df: pd.DataFrame) -> pd.DataFrame:
+def filter_common_datasets(df: pl.DataFrame) -> pl.DataFrame:
     """
     Filter dataframe to only include datasets present in all methods.
 
     This ensures that the averaging plot is fair - methods that only train on
     a subset of datasets won't be penalized by missing data from larger datasets.
     """
-    # Get the set of datasets for each method
-    method_dataset_sets = [
-        set(datasets) for _, datasets in df.groupby("afa_method")["dataset"]
-    ]
-
-    # Find datasets that appear in all methods
-    common_datasets = set.intersection(*method_dataset_sets)
-
-    # Filter the dataframe to only include common datasets
-    return df.loc[df["dataset"].isin(list(common_datasets))]
+    common_datasets = (
+        df.group_by("dataset")
+        .agg(pl.col("afa_method").n_unique().alias("methods"))
+        .filter(pl.col("methods") == df["afa_method"].n_unique())
+    )
+    return df.filter(
+        pl.col("dataset").is_in(
+            common_datasets["dataset"].implode(), nulls_equal=True
+        )
+    )
 
 
 def get_plots(
-    df: pd.DataFrame, plotting_config: PlottingDisplayConfig
+    df: pl.DataFrame, plotting_config: PlottingDisplayConfig
 ) -> tuple[p9.ggplot, p9.ggplot]:
     # Apply name transforms
-    df = df.assign(
-        dataset=df["dataset"].replace(plotting_config.dataset_name_mapping),
-        afa_method=df["afa_method"].replace(
-            plotting_config.method_name_mapping
-        ),
+    df = df.with_columns(
+        pl.col("dataset").replace(plotting_config.dataset_name_mapping),
+        pl.col("afa_method").replace(plotting_config.method_name_mapping),
     )
 
     # For averaging plot, only use datasets present in all methods
@@ -167,7 +156,7 @@ def get_plots(
     method_order.reverse()
 
     # Filter to only mapped methods present in the data.
-    available_methods = set(df["afa_method"].unique().tolist())
+    available_methods = set(df["afa_method"].unique().to_list())
     method_order_filtered = [m for m in method_order if m in available_methods]
     # Include methods that are present in data but not in METHOD_NAME_MAPPING.
     # This keeps new/experimental methods from becoming nulls in the cast.
@@ -176,18 +165,21 @@ def get_plots(
 
     # Cast to categorical with the correct order. Stages stack in reverse
     # pipeline order, the last stage at the bottom.
-    dtypes = {
-        "afa_method": pd.CategoricalDtype(method_order_filtered),
-        "stage": pd.CategoricalDtype(list(reversed(STAGE_LABELS))),
-    }
-    df_common = df_common.astype(dtypes)
-    df = df.astype(dtypes)
+    dtypes = pl.Schema(
+        {
+            "afa_method": pl.Enum(method_order_filtered),
+            "stage": pl.Enum(list(reversed(STAGE_LABELS))),
+        }
+    )
+    df_common = df_common.cast(dtypes)
+    df = df.cast(dtypes)
 
     # One plot averaged over datasets (using only common datasets)
     averaged_plot = ggplot(
-        df_common.groupby(["afa_method", "stage"], observed=True)["time"]
-        .mean()
-        .reset_index()
+        df_common.group_by(["afa_method", "stage"])
+        .agg(pl.col("time").mean())
+        .sort(["afa_method", "stage"])
+        .to_pandas()
     ) + geom_bar(
         aes(x="afa_method", y="time", fill="stage"),
         stat="identity",
@@ -196,7 +188,7 @@ def get_plots(
 
     # Another one faceted over datasets (showing all datasets)
     dataset_plot = (
-        ggplot(df)
+        ggplot(df.to_pandas())
         + geom_bar(
             aes(x="afa_method", y="time", fill="stage"), stat="identity"
         )
@@ -207,7 +199,7 @@ def get_plots(
 
 
 def save_time_plots(
-    durations: pd.DataFrame,
+    durations: pl.DataFrame,
     output_folder: Path,
     plotting_config: PlottingDisplayConfig,
     formats: Sequence[str] = ("pdf",),

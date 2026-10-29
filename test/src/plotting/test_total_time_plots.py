@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pytest
 
@@ -46,9 +46,9 @@ def evaluation_record(
 
 def job_duration_table(
     rows: list[tuple[str, str, str, float, str]],
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """Rows of (job_record_path, stage, dataset_key, duration, exit_status)."""
-    table = pd.DataFrame(
+    table = pl.DataFrame(
         [
             {
                 "job_record_path": path,
@@ -60,9 +60,9 @@ def job_duration_table(
             }
             for path, stage, dataset, duration, exit_status in rows
         ],
-        columns=pd.Index(COLUMN_DTYPES),
+        schema=COLUMN_DTYPES,
     )
-    return table.astype(COLUMN_DTYPES)
+    return table
 
 
 def completed(
@@ -156,7 +156,7 @@ def test_each_selected_method_gets_its_completed_jobs_of_this_run() -> None:
         eval_dataset_split="test",
     )
 
-    assert sorted(durations.itertuples(index=False, name=None)) == [
+    assert sorted(durations.iter_rows()) == [
         ("gdfs", "cube", "evaluation", 1.0),
         ("gdfs", "cube", "training", 5.0),
         ("jafa", "cube", "classifier_training", 7.0),
@@ -193,14 +193,14 @@ def test_a_pretrained_model_counts_for_every_method_trained_from_it() -> None:
         eval_dataset_split="test",
     )
 
-    assert sorted(durations.itertuples(index=False, name=None)) == [
+    assert sorted(durations.iter_rows()) == [
         ("jafa", "cube", "pretraining", 3.0),
         ("odin", "cube", "pretraining", 3.0),
     ]
 
 
 @pytest.fixture
-def durations() -> pd.DataFrame:
+def durations() -> pl.DataFrame:
     rows = [
         ("jafa", "cube", "pretraining", 2.0),
         ("jafa", "cube", "training", 10.0),
@@ -215,8 +215,8 @@ def durations() -> pd.DataFrame:
         ("other", "cube", "classifier_training", 2.0),
         ("other", "cube", "training", 2.0),
     ]
-    return pd.DataFrame(
-        rows, columns=pd.Index(["afa_method", "dataset", "stage", "time"])
+    return pl.DataFrame(
+        rows, schema=["afa_method", "dataset", "stage", "time"], orient="row"
     )
 
 
@@ -225,7 +225,7 @@ def category_order(df: object, column: str) -> list[str]:
 
 
 def test_average_is_the_mean_job_duration_over_datasets_shared_by_all_methods(
-    durations: pd.DataFrame,
+    durations: pl.DataFrame,
     plotting_config: PlottingDisplayConfig,
 ) -> None:
     averaged_plot, _ = get_plots(durations, plotting_config)
@@ -247,7 +247,7 @@ def test_average_is_the_mean_job_duration_over_datasets_shared_by_all_methods(
 
 
 def test_methods_follow_reversed_mapping_order_and_stages_stack_last_first(
-    durations: pd.DataFrame,
+    durations: pl.DataFrame,
     plotting_config: PlottingDisplayConfig,
 ) -> None:
     averaged_plot, dataset_plot = get_plots(durations, plotting_config)
@@ -283,7 +283,7 @@ def test_time_plots_are_saved_from_a_job_duration_table(
             completed(training_record("gdfs"), "training", 5),
             completed(evaluation_record("gdfs"), "evaluation", 1),
         ]
-    ).to_parquet(table_path, index=False)
+    ).write_parquet(table_path)
     output_folder = tmp_path / "plots"
     durations = method_job_durations(
         load_job_duration_table(table_path),
@@ -298,4 +298,32 @@ def test_time_plots_are_saved_from_a_job_duration_table(
     assert sorted(path.name for path in output_folder.iterdir()) == [
         "average_time.png",
         "dataset_time.png",
+    ]
+
+
+def test_average_keeps_unknown_dataset_when_shared_by_every_method(
+    plotting_config: PlottingDisplayConfig,
+) -> None:
+    durations = pl.DataFrame(
+        {
+            "afa_method": ["gdfs", "jafa"],
+            "dataset": [None, None],
+            "stage": ["training", "training"],
+            "time": [3.0, 5.0],
+        },
+        schema={
+            "afa_method": pl.String,
+            "dataset": pl.String,
+            "stage": pl.String,
+            "time": pl.Float64,
+        },
+    )
+
+    averaged_plot, _ = get_plots(durations, plotting_config)
+
+    assert pa.table(averaged_plot.data).select(
+        ["afa_method", "time"]
+    ).to_pylist() == [
+        {"afa_method": "GDFS", "time": 3.0},
+        {"afa_method": "JAFA", "time": 5.0},
     ]

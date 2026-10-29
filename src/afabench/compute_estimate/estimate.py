@@ -25,9 +25,9 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, astuple, dataclass, fields
 from graphlib import TopologicalSorter
-from typing import Literal
+from typing import Literal, cast
 
-import pandas as pd
+import polars as pl
 
 from afabench.core.job_record import JobIdentity, JobType
 from afabench.pipeline_plan.planning import PlannedJob
@@ -170,7 +170,7 @@ def _longest(ending: tuple[float, list[JobEstimate]]) -> tuple[float, int]:
 
 
 def estimate_compute(
-    planned_jobs: Sequence[PlannedJob], job_durations: pd.DataFrame
+    planned_jobs: Sequence[PlannedJob], job_durations: pl.DataFrame
 ) -> ComputeEstimate:
     """
     Estimate planned jobs from a job duration table's rows.
@@ -179,26 +179,28 @@ def estimate_compute(
     """
     # Only completed jobs ran for their whole job duration. Smoke-test jobs
     # did too, but would make the estimate far too low.
-    smoke_test = job_durations["smoke_test"].fillna(value=False).astype(bool)
-    usable = job_durations.loc[
-        job_durations["exit_status"].eq("completed") & ~smoke_test
-    ].reset_index(drop=True)
+    smoke_test = job_durations["smoke_test"].fill_null(False)
+    usable = job_durations.filter(
+        (pl.col("exit_status") == "completed") & ~smoke_test
+    )
     # Positions of the usable job records per key
     exact: defaultdict[Key, list[int]] = defaultdict(list)
     pools: defaultdict[Key, list[int]] = defaultdict(list)
-    for position, record in enumerate(_records(usable[EXACT_COLUMNS])):
+    for position, record in enumerate(
+        usable.select(EXACT_COLUMNS).iter_rows(named=True)
+    ):
         exact[_key(record, EXACT_COLUMNS)].append(position)
         pools[_key(record, POOL_COLUMNS)].append(position)
     matches = [_match(job, exact, pools) for job in planned_jobs]
-    durations = usable["job_duration_seconds"].astype(float)
-    matched = usable.iloc[
+    durations = usable["job_duration_seconds"].fill_nan(None)
+    matched = usable[
         sorted(
             {position for _, positions in matches for position in positions}
         )
     ]
     return ComputeEstimate(
         jobs=[
-            _estimate(job, match_level, durations.iloc[positions])
+            _estimate(job, match_level, durations.gather(positions))
             for job, (match_level, positions) in zip(
                 planned_jobs, matches, strict=True
             )
@@ -213,16 +215,16 @@ def estimate_compute(
         refused_smoke_test_job_records=int(smoke_test.sum()),
         failure_histories=_failure_histories(
             planned_jobs,
-            job_durations.loc[
-                job_durations["exit_status"].isin(["failed", "timeout"])
+            job_durations.filter(
+                pl.col("exit_status").is_in(["failed", "timeout"])
                 & ~smoke_test
-            ],
+            ),
         ),
     )
 
 
 def _failure_histories(
-    planned_jobs: Sequence[PlannedJob], failures: pd.DataFrame
+    planned_jobs: Sequence[PlannedJob], failures: pl.DataFrame
 ) -> list[FailureHistory]:
     """Return the failure history of each planned job type that has one."""
     planned_types = {
@@ -231,11 +233,9 @@ def _failure_histories(
     timed_out: defaultdict[Key, int] = defaultdict(int)
     failed: defaultdict[Key, int] = defaultdict(int)
     time_limits: defaultdict[Key, set[int]] = defaultdict(set)
-    for record in _records(
-        failures.loc[
-            :, [*JOB_TYPE_COLUMNS, "exit_status", "time_limit_minutes"]
-        ]
-    ):
+    for record in failures.select(
+        [*JOB_TYPE_COLUMNS, "exit_status", "time_limit_minutes"]
+    ).iter_rows(named=True):
         key = _key(record, JOB_TYPE_COLUMNS)
         if record["exit_status"] == "timeout":
             timed_out[key] += 1
@@ -277,19 +277,16 @@ def _match(
 
 
 def _estimate(
-    job: PlannedJob, match_level: MatchLevel, durations: pd.Series
+    job: PlannedJob, match_level: MatchLevel, durations: pl.Series
 ) -> JobEstimate:
-    estimated = not durations.empty
     return JobEstimate(
         job=job,
         match_level=match_level,
         matched_job_records=len(durations),
-        mean_job_duration_seconds=float(durations.mean())
-        if estimated
-        else None,
-        p90_job_duration_seconds=float(durations.quantile(0.9))
-        if estimated
-        else None,
+        mean_job_duration_seconds=cast("float | None", durations.mean()),
+        p90_job_duration_seconds=durations.quantile(
+            0.9, interpolation="linear"
+        ),
     )
 
 
@@ -299,15 +296,9 @@ def _hours(seconds: float | None, count: int | None) -> float | None:
     return seconds / 3600 * count
 
 
-def _records(table: pd.DataFrame) -> list[dict[str, object]]:
-    """Return a table's rows with None for NA, as job records hold it."""
-    values = table.astype(object)
-    return values.where(values.notna(), None).to_dict("records")
-
-
 def _key(values: Mapping[str, object], columns: list[str]) -> Key:
     return tuple(values[column] for column in columns)
 
 
-def _distinct(values: pd.Series) -> list[str]:
-    return sorted(str(value) for value in values.dropna().unique())
+def _distinct(values: pl.Series) -> list[str]:
+    return sorted(str(value) for value in values.drop_nulls().unique())

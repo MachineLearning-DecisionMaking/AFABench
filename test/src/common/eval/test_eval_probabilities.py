@@ -3,7 +3,7 @@
 import re
 from typing import cast
 
-import pandas as pd
+import polars as pl
 import pytest
 import torch
 from jaxtyping import Shaped
@@ -54,7 +54,7 @@ def stop_when_observed(
 def evaluate_probabilities(
     external: AFAPredictFn | None = observed_probabilities,
     builtin: AFAPredictFn | None = observed_probabilities,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     features = torch.tensor([[1.0], [2.0]])
     mask = torch.tensor([[False], [True]])
     return process_batch(
@@ -81,8 +81,8 @@ def test_process_batch_retains_probabilities_at_every_recorded_time_step() -> (
         [0, 1],
     ]
     expected = [[0.75, 0.25], [0.125, 0.875], [0.125, 0.875]]
-    assert result["external_predicted_probabilities"].tolist() == expected
-    assert result["builtin_predicted_probabilities"].tolist() == expected
+    assert result["external_predicted_probabilities"].to_list() == expected
+    assert result["builtin_predicted_probabilities"].to_list() == expected
 
 
 def test_evaluation_leaves_class_decisions_to_consumers() -> None:
@@ -183,13 +183,13 @@ def test_evaluation_converts_only_explicitly_declared_logits_upstream() -> (
         builtin=None,
     )
 
-    assert probabilities["external_predicted_probabilities"].iloc[0] == [
+    assert probabilities["external_predicted_probabilities"].to_list()[0] == [
         0.75,
         0.25,
     ]
-    assert logits["external_predicted_probabilities"].iloc[0] == pytest.approx(
-        [0.62245933, 0.37754067]
-    )
+    assert logits["external_predicted_probabilities"].to_list()[
+        0
+    ] == pytest.approx([0.62245933, 0.37754067])
 
 
 def test_evaluation_adapter_rejects_unknown_output_kind() -> None:

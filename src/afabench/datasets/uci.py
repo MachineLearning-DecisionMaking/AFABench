@@ -2,10 +2,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, override
 
-import pandas as pd
+import polars as pl
 import torch
 
-from afabench.datasets.tabular_csv import TabularCSVDataset
+from afabench.datasets.tabular_csv import TabularCSVDataset, prepared_csv_bytes
 
 
 class UCIDataset(TabularCSVDataset, ABC):
@@ -31,9 +31,9 @@ class UCIDataset(TabularCSVDataset, ABC):
     @classmethod
     @override
     def make_prepared_source(cls) -> bytes:
-        return cls._fetch_uci().to_csv(index=False).encode()
+        return prepared_csv_bytes(cls._fetch_uci())
 
     @classmethod
     @abstractmethod
-    def _fetch_uci(cls) -> pd.DataFrame:
+    def _fetch_uci(cls) -> pl.DataFrame:
         """Return the UCI repository's data as the frame `_read_source` reads, with the label last."""

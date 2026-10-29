@@ -7,9 +7,10 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pytest
 import torch
+from polars.testing import assert_frame_equal
 
 from afabench.components.classifiers import (
     UniformDummyAFAClassifier,
@@ -50,11 +51,11 @@ from scripts.eval.eval_afa_method import AFAEvaluator, MethodRecordStageError
 REPO_ROOT = Path(__file__).parents[2]
 TRAIN_SEED = 11
 IDENTITY_DTYPES = {
-    "afa_method": "string",
-    "dataset": "string",
+    "afa_method": "String",
+    "dataset": "String",
     "dataset_realization_index": "UInt64",
-    "eval_split": "string",
-    "initializer": "string",
+    "eval_split": "String",
+    "initializer": "String",
     "train_seed": "UInt64",
     "train_hard_budget": "Float64",
     "train_soft_budget_param": "Float64",
@@ -175,7 +176,7 @@ def test_evaluation_table_round_trips_its_provenance_record(
     )
     path = tmp_path / "eval_data.parquet"
 
-    save_evaluation_table(pd.DataFrame({"a": [1]}), path, provenance=record)
+    save_evaluation_table(pl.DataFrame({"a": [1]}), path, provenance=record)
 
     assert evaluation_table_provenance(path) == record
 
@@ -184,7 +185,7 @@ def test_evaluation_table_without_a_record_reports_it_absent(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "eval_data.parquet"
-    pd.DataFrame({"a": [1]}).to_parquet(path, index=False)
+    pl.DataFrame({"a": [1]}).write_parquet(path)
 
     assert evaluation_table_provenance(path) is None
 
@@ -259,21 +260,18 @@ def test_evaluation_table_columns_identify_it_without_afabench(
         eval_config(eval_inputs, save_path, seed=5), initializer_name="warm"
     ).run()
 
-    # A results-only user reads the table with plain pandas
+    # A results-only user reads the table with plain Polars
     completed = subprocess.run(
         [
             sys.executable,
             "-c",
             "import json, sys\n"
-            "import pandas as pd\n"
-            f"table = pd.read_parquet({str(save_path)!r})[{list(IDENTITY_DTYPES)!r}]\n"
+            "import polars as pl\n"
+            f"table = pl.read_parquet({str(save_path)!r}).select({list(IDENTITY_DTYPES)!r})\n"
             "assert not any(m.startswith('afabench') for m in sys.modules)\n"
             "print(json.dumps({\n"
-            "    'dtypes': {k: str(v) for k, v in table.dtypes.items()},\n"
-            "    'rows': table.astype(object)\n"
-            "    .where(table.notna(), None)\n"
-            "    .drop_duplicates()\n"
-            "    .to_dict('records'),\n"
+            "    'dtypes': {k: str(v) for k, v in table.schema.items()},\n"
+            "    'rows': table.unique().to_dicts(),\n"
             "}))\n",
         ],
         capture_output=True,
@@ -281,7 +279,7 @@ def test_evaluation_table_columns_identify_it_without_afabench(
         check=True,
     )
     table = json.loads(completed.stdout)
-    assert table["dtypes"] == IDENTITY_DTYPES
+    assert table["dtypes"] == {k: str(v) for k, v in IDENTITY_DTYPES.items()}
     assert table["rows"] == [
         {
             "afa_method": "random_dummy",
@@ -297,7 +295,7 @@ def test_evaluation_table_columns_identify_it_without_afabench(
             "eval_soft_budget_param": None,
         }
     ]
-    SavedEvaluationSchema.validate(pd.read_parquet(save_path))
+    SavedEvaluationSchema.validate(pl.read_parquet(save_path))
 
 
 def test_evaluation_table_drops_internal_bookkeeping_columns(
@@ -308,7 +306,7 @@ def test_evaluation_table_drops_internal_bookkeeping_columns(
         eval_config(eval_inputs, save_path, seed=5), initializer_name="warm"
     ).run()
 
-    saved = pd.read_parquet(save_path)
+    saved = pl.read_parquet(save_path)
     assert "prev_selections_performed" not in saved
     assert "idx" not in saved
 
@@ -332,10 +330,10 @@ def test_training_settings_missing_from_the_method_record_are_null(
         eval_config(eval_inputs, save_path, seed=5), initializer_name="warm"
     ).run()
 
-    table = pd.read_parquet(save_path)
-    assert table["train_seed"].unique().tolist() == [TRAIN_SEED]
-    assert table["train_hard_budget"].isna().all()
-    assert table["train_soft_budget_param"].isna().all()
+    table = pl.read_parquet(save_path)
+    assert table["train_seed"].unique().to_list() == [TRAIN_SEED]
+    assert table["train_hard_budget"].is_null().all()
+    assert table["train_soft_budget_param"].is_null().all()
 
 
 def test_method_bundle_with_a_record_of_another_stage_is_rejected(
@@ -361,7 +359,7 @@ def test_null_seed_is_resolved_once_and_reproduces_the_table(
         eval_config(eval_inputs, first_path, seed=None),
         initializer_name="warm",
     ).run()
-    first = pd.read_parquet(first_path)
+    first = pl.read_parquet(first_path)
     record = evaluation_table_provenance(first_path)
     assert record is not None
     assert set(first["eval_seed"]) == {record.seed}
@@ -372,7 +370,7 @@ def test_null_seed_is_resolved_once_and_reproduces_the_table(
         initializer_name="warm",
     ).run()
 
-    pd.testing.assert_frame_equal(pd.read_parquet(rerun_path), first)
+    assert_frame_equal(pl.read_parquet(rerun_path), first)
 
 
 # A Hydra subprocess takes about 7 s, too slow for the default suite
@@ -405,15 +403,15 @@ def test_hand_run_evaluation_identifies_its_table(
     )
     assert completed.returncode == 0, completed.stderr[-4000:]
 
-    table = pd.read_parquet(save_path)
+    table = pl.read_parquet(save_path)
     method = bundle_provenance(eval_inputs.method)
     dataset = bundle_provenance(eval_inputs.dataset)
     record = evaluation_table_provenance(save_path)
     assert method is not None
     assert dataset is not None
     assert record is not None
-    identity = table.loc[:, list(IDENTITY_DTYPES)].drop_duplicates()
-    assert identity.to_dict(orient="records") == [
+    identity = table.select(list(IDENTITY_DTYPES)).unique()
+    assert identity.to_dicts() == [
         {
             "afa_method": method.method_name,
             "dataset": dataset.dataset_key,
@@ -449,11 +447,11 @@ def test_evaluator_adapts_declared_logits_and_round_trips_probabilities(
 
     AFAEvaluator(cfg, initializer_name="warm").run()
 
-    table = pd.read_parquet(path)
+    table = pl.read_parquet(path)
     SavedEvaluationSchema.validate(table)
     assert all(
-        vector.tolist() == [0.125] * 8
-        for vector in table["builtin_predicted_probabilities"]
+        vector == [0.125] * 8
+        for vector in table["builtin_predicted_probabilities"].to_list()
     )
     if with_external:
         assert all(
@@ -461,9 +459,9 @@ def test_evaluator_adapts_declared_logits_and_round_trips_probabilities(
             for vector in table["external_predicted_probabilities"]
         )
     else:
-        assert table["external_predicted_probabilities"].isna().all()
+        assert table["external_predicted_probabilities"].is_null().all()
     assert evaluation_table_provenance(path) is not None
     assert (
-        table.groupby("episode_id")["step"].apply(list).tolist()
+        table.group_by("episode_id").agg("step")["step"].to_list()
         == [[0, 1, 2]] * 4
     )

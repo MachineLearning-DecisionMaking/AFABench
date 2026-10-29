@@ -1,6 +1,8 @@
+"""Public-seam assertions and deterministic policies for evaluation tests."""
+
 from collections.abc import Sequence
 
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.core.types import (
@@ -17,30 +19,30 @@ from afabench.evaluation.history import reconstruct_selection_history
 
 
 def _row_at_selection_history(
-    df: pd.DataFrame, selections: Sequence[int]
-) -> pd.Series:
+    df: pl.DataFrame, selections: Sequence[int]
+) -> dict[str, object]:
     histories = reconstruct_selection_history(df)
     expected = list(selections)
-    rows = df[histories.apply(lambda history: history == expected)]
+    rows = df.filter(
+        pl.Series([history == expected for history in histories.to_list()])
+    )
     assert len(rows) == 1, (
         f"Expected one row with selection history {expected}, got:\n{rows}"
     )
-    return rows.iloc[0]
+    return rows.row(0, named=True)
 
 
 def assert_where_selections_there_cost(
-    df: pd.DataFrame, selections: Sequence[int], cost: float
+    df: pl.DataFrame, selections: Sequence[int], cost: float
 ) -> None:
-    """Assert the cost at the specified pre-action selection history."""
     assert (
         _row_at_selection_history(df, selections)["accumulated_cost"] == cost
     )
 
 
 def assert_where_selections_there_action(
-    df: pd.DataFrame, selections: Sequence[int], action: int
+    df: pl.DataFrame, selections: Sequence[int], action: int
 ) -> None:
-    """Assert the action at the specified pre-action selection history."""
     assert (
         _row_at_selection_history(df, selections)["action_performed"] == action
     )
@@ -74,16 +76,9 @@ def get_deterministic_afa_action_fn(actions: Sequence[int]) -> AFAActionFn:
 def get_batched_deterministic_afa_action_fn(
     actions: Sequence[Sequence[int]],
 ) -> AFAActionFn:
-    """
-    Return an AFAActionFn that outputs actions in a specified order.
-
-    Handles variable batch sizes that occur when process_batch removes samples
-    that have completed. Tracks which original samples are still active by
-    monitoring the batch size.
-    """
+    """Output planned actions, removing finished instances from the batch end."""
     action_idx = 0
-    original_batch_size = len(actions)
-    active_indices = list(range(original_batch_size))
+    active_indices = list(range(len(actions)))
 
     def f(
         masked_features: MaskedFeatures,
@@ -97,17 +92,13 @@ def get_batched_deterministic_afa_action_fn(
         )
         batch_size = masked_features.shape[0]
         nonlocal action_idx, active_indices
-
-        # If batch size changed, remove the sample that finished
-        # Samples are removed from process_batch when they complete,
-        # and they're always removed from the end of active_indices
         if batch_size < len(active_indices):
             active_indices = active_indices[:batch_size]
-
         action_tensor = torch.zeros((batch_size, 1), dtype=torch.long)
         for local_idx in range(batch_size):
-            global_idx = active_indices[local_idx]
-            action_tensor[local_idx, 0] = actions[global_idx][action_idx]
+            action_tensor[local_idx, 0] = actions[active_indices[local_idx]][
+                action_idx
+            ]
         action_idx += 1
         return action_tensor
 
@@ -121,11 +112,11 @@ def get_batch_from_costs_and_budget(
     selection_costs: Sequence[float],
     batch_size: int = 2,
     n_features: int = 5,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     features = torch.zeros((batch_size, n_features))
     true_label = torch.zeros((batch_size, 2))
     true_label[:, :] = torch.tensor([0, 1])
-    df = process_batch(
+    return process_batch(
         afa_action_fn=afa_action_fn,
         afa_unmask_fn=afa_unmask_fn,
         n_selection_choices=4,
@@ -134,32 +125,19 @@ def get_batch_from_costs_and_budget(
         initial_feature_mask=torch.zeros_like(features, dtype=torch.bool),
         true_label=true_label,
         feature_shape=torch.Size((n_features,)),
-        external_afa_predict_fn=None,
-        builtin_afa_predict_fn=None,
         selection_budget=selection_budget,
         selection_costs=selection_costs,
     )
-    return df
 
 
 def assert_terminated_after_n_steps(
-    df: pd.DataFrame, idx: int, n_steps: int, forced: bool | None = None
+    df: pl.DataFrame, idx: int, n_steps: int, forced: bool | None = None
 ) -> None:
-    """
-    Assert that sample `idx` terminated after performing `n_steps` actions.
-
-    Args:
-        df: The dataframe from process_batch
-        idx: The sample index to check
-        n_steps: The number of actual selections
-        forced: if set, checks that the "forced_stop" column is set to the specified value. Can be used to distinguish between cases where an episode stops due to a method voluntarily choosing to stop, or being forced to stop due to exceeding the budget.
-    """
-    sample_rows = df[df["episode_id"] == idx]
+    sample_rows = df.filter(pl.col("episode_id") == idx)
     assert len(sample_rows) == n_steps, (
-        f"Expected {n_steps} rows for sample {idx}, but got {len(sample_rows)}. "
+        f"Expected {n_steps} rows for instance {idx}, got {len(sample_rows)}."
     )
-    # There should be a single row where the action = 0 (stop action)
-    for _, row in sample_rows.iterrows():
+    for row in sample_rows.iter_rows(named=True):
         if row["step"] == n_steps - 1:
             assert row["action_performed"] == 0
             if forced is not None:

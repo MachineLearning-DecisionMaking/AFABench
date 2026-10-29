@@ -1,41 +1,35 @@
-"""Contracts for evaluation rows and metadata-enriched Parquet results."""
+"""Polars contracts for evaluation rows and metadata-enriched Parquet results."""
 
-from numbers import Integral, Real
-from typing import Any, Literal
+from typing import Annotated, Literal
 
-import pandas as pd
-import pandera.pandas as pa
-from pandera.typing import Series
-
-
-def _nonnegative_integer(value: object) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, Integral)
-        and int(value) >= 0
-    )
+import pandera.polars as pa
+import polars as pl
+from pandera.typing.polars import Series
 
 
-def validate_episode_log(frame: pd.DataFrame) -> None:
-    """
-    Require complete episodes within one artifact, regardless of row order.
-
-    Raises ValueError for invalid identity/action types, missing or duplicate
-    steps, or anything other than a single terminal stop per episode.
-    """
+def validate_episode_log(frame: pl.DataFrame) -> None:
+    """Require complete episodes within one artifact, regardless of row order."""
     for column in ("episode_id", "step", "action_performed"):
-        if column not in frame or not frame.columns.is_unique:
-            msg = f"Missing or duplicate episode-log column: {column}"
+        if column not in frame.columns:
+            msg = f"Missing episode-log column: {column}"
             raise ValueError(msg)
-        if not all(_nonnegative_integer(value) for value in frame[column]):
+        values = frame[column]
+        if (
+            not values.dtype.is_integer()
+            or values.null_count()
+            or (values < 0).any()
+        ):
             msg = f"{column} must contain nonnegative integers"
             raise ValueError(msg)
-    for episode_id, episode in frame.sort_values("step").groupby("episode_id"):
-        if episode["step"].tolist() != list(range(len(episode))):
+    for episode in frame.sort("step").partition_by(
+        "episode_id", maintain_order=True
+    ):
+        episode_id = episode["episode_id"][0]
+        if episode["step"].to_list() != list(range(len(episode))):
             msg = f"Episode {episode_id} has missing or duplicate steps"
             raise ValueError(msg)
         actions = episode["action_performed"]
-        if actions.iloc[-1] != 0 or (actions.iloc[:-1] == 0).any():
+        if actions[-1] != 0 or (actions[:-1] == 0).any():
             msg = f"Episode {episode_id} must have exactly one terminal stop"
             raise ValueError(msg)
 
@@ -43,141 +37,110 @@ def validate_episode_log(frame: pd.DataFrame) -> None:
 class BatchEvaluationSchema(pa.DataFrameModel):
     """One row per episode and zero-based time step of one evaluated batch."""
 
-    episode_id: Series[int] = pa.Field(ge=0)
-    step: Series[int] = pa.Field(ge=0)
-    action_performed: Series[int] = pa.Field(ge=0)
-    # Object cells contain a full vector in label class-index order, or None.
-    builtin_predicted_probabilities: Series[object] = pa.Field(nullable=True)
-    external_predicted_probabilities: Series[object] = pa.Field(nullable=True)
-    true_class: Series[int] = pa.Field(ge=0)
-    accumulated_cost: Series[float] = pa.Field(ge=0)
-    forced_stop: Series[bool] = pa.Field()
+    episode_id: Series[pl.Int64] = pa.Field(ge=0)
+    step: Series[pl.Int64] = pa.Field(ge=0)
+    action_performed: Series[pl.Int64] = pa.Field(ge=0)
+    builtin_predicted_probabilities: Series[Annotated[pl.List, pl.Float64]] = (
+        pa.Field(nullable=True)
+    )
+    external_predicted_probabilities: Series[
+        Annotated[pl.List, pl.Float64]
+    ] = pa.Field(nullable=True)
+    true_class: Series[pl.Int64] = pa.Field(ge=0)
+    accumulated_cost: Series[pl.Float64] = pa.Field(ge=0)
+    forced_stop: Series[pl.Boolean] = pa.Field()
 
     @pa.dataframe_check
     @classmethod
-    def complete_episodes(cls, frame: pd.DataFrame) -> bool:
+    def complete_episodes(cls, data: pa.PolarsData) -> bool:
         try:
-            validate_episode_log(frame)
+            validate_episode_log(data.lazyframe.collect())
         except ValueError:
             return False
         return True
 
     class Config(pa.DataFrameModel.Config):
         strict: bool | Literal["filter"] = True
-        unique_column_names: bool = True
 
 
 class EvaluationSchema(BatchEvaluationSchema):
-    """
-    Evaluation rows that also identify each episode's instance.
+    """Evaluation rows identifying each episode's instance (ADR 0004)."""
 
-    `split_index` is the instance's position in the evaluated split and
-    `generation_index` its position in the generated dataset (ADR 0004).
-    """
-
-    generation_index: Series[int] = pa.Field(ge=0)
-    split_index: Series[int] = pa.Field(ge=0)
+    generation_index: Series[pl.Int64] = pa.Field(ge=0)
+    split_index: Series[pl.Int64] = pa.Field(ge=0)
 
     @pa.dataframe_check
     @classmethod
-    def one_instance_per_episode(cls, frame: pd.DataFrame) -> bool:
-        per_episode = frame.groupby("episode_id")[
-            ["generation_index", "split_index"]
-        ].nunique()
-        return bool((per_episode <= 1).all().all())
-
-
-class PreProvenanceSavedEvaluationSchema(EvaluationSchema):
-    """
-    Evaluation rows as the evaluator saved them before ADR 0002.
-
-    Such tables have no identity columns beyond `eval_seed` and
-    `eval_hard_budget`; the transform step still accepts them.
-    """
-
-    eval_seed: Series[Any] = pa.Field(nullable=True)
-    eval_hard_budget: Series[Any] = pa.Field(nullable=True)
-
-    @pa.check("eval_seed", element_wise=True)
-    @classmethod
-    def valid_seed(cls, value: object) -> bool:
-        return not isinstance(value, bool) and isinstance(value, Integral)
-
-    @pa.check("eval_hard_budget", element_wise=True)
-    @classmethod
-    def valid_budget(cls, value: object) -> bool:
+    def one_instance_per_episode(cls, data: pa.PolarsData) -> pl.LazyFrame:
         return (
-            not isinstance(value, bool)
-            and isinstance(value, Real)
-            and float(value) >= 0
+            data.lazyframe.group_by("episode_id")
+            .agg(
+                pl.all_horizontal(
+                    pl.col("generation_index").n_unique() <= 1,
+                    pl.col("split_index").n_unique() <= 1,
+                ).alias("valid")
+            )
+            .select("valid")
         )
 
 
-# The identity columns of a saved evaluation table, with their pandas dtypes
 IDENTITY_DTYPES = {
-    "afa_method": "string",
-    "dataset": "string",
-    "dataset_realization_index": "UInt64",
-    "eval_split": "string",
-    "initializer": "string",
-    "train_seed": "UInt64",
-    "train_hard_budget": "Float64",
-    "train_soft_budget_param": "Float64",
-    "eval_seed": "UInt64",
-    "eval_hard_budget": "Float64",
-    "eval_soft_budget_param": "Float64",
+    "afa_method": pl.String,
+    "dataset": pl.String,
+    "dataset_realization_index": pl.UInt64,
+    "eval_split": pl.String,
+    "initializer": pl.String,
+    "train_seed": pl.UInt64,
+    "train_hard_budget": pl.Float64,
+    "train_soft_budget_param": pl.Float64,
+    "eval_seed": pl.UInt64,
+    "eval_hard_budget": pl.Float64,
+    "eval_soft_budget_param": pl.Float64,
 }
 
-
-# The columns of a plotting-ready evaluation table, with their pandas dtypes.
-# Tables split by classifier type have no `classifier` column.
 PLOTTING_READY_DTYPES = {
-    "classifier": "string",
-    "generation_index": "UInt64",
-    "split_index": "UInt64",
-    "action_performed": "UInt64",
-    "true_class": "UInt64",
-    "accumulated_cost": "Float64",
-    "forced_stop": "boolean",
-    "n_selections_performed": "UInt64",
-    # Full class-index-ordered vector of the row's classifier, or null.
-    "predicted_probabilities": "object",
+    "classifier": pl.String,
+    "generation_index": pl.UInt64,
+    "split_index": pl.UInt64,
+    "action_performed": pl.UInt64,
+    "true_class": pl.UInt64,
+    "accumulated_cost": pl.Float64,
+    "forced_stop": pl.Boolean,
+    "n_selections_performed": pl.UInt64,
+    "predicted_probabilities": pl.List(pl.Float64),
     **IDENTITY_DTYPES,
 }
 
 
-def identity_column(name: str, value: object, index: pd.Index) -> pd.Series:
-    """Return identity column `name` holding `value`, null for `None`."""
-    # Built as object first so that None becomes the nullable dtype's NA
-    return pd.Series(value, index=index, dtype=object).astype(
-        IDENTITY_DTYPES[name]
-    )
+def identity_column(name: str, value: object, length: int) -> pl.Series:
+    """Return a typed identity column; None is an explicit null."""
+    return pl.Series(name, [value] * length).cast(IDENTITY_DTYPES[name])
 
 
 class SavedEvaluationSchema(EvaluationSchema):
-    """
-    Evaluation rows with the identity columns the evaluator adds (ADR 0002).
+    """Evaluation rows with constant, nullable identity columns (ADR 0002)."""
 
-    Identity columns are constant per table and use pandas nullable dtypes,
-    which Parquet round-trips. A null value is unknown: its source bundle
-    predates provenance, or the setting (a budget) was not given.
-    """
-
-    afa_method: Series[pd.StringDtype] = pa.Field(nullable=True)
-    dataset: Series[pd.StringDtype] = pa.Field(nullable=True)
-    dataset_realization_index: Series[pd.UInt64Dtype] = pa.Field(nullable=True)
-    eval_split: Series[pd.StringDtype] = pa.Field(
+    afa_method: Series[pl.String] = pa.Field(nullable=True)
+    dataset: Series[pl.String] = pa.Field(nullable=True)
+    dataset_realization_index: Series[pl.UInt64] = pa.Field(nullable=True)
+    eval_split: Series[pl.String] = pa.Field(
         nullable=True, isin=["train", "val", "test"]
     )
-    initializer: Series[pd.StringDtype] = pa.Field()
-    train_seed: Series[pd.UInt64Dtype] = pa.Field(nullable=True)
-    train_hard_budget: Series[pd.Float64Dtype] = pa.Field(nullable=True, ge=0)
-    train_soft_budget_param: Series[pd.Float64Dtype] = pa.Field(nullable=True)
-    eval_seed: Series[pd.UInt64Dtype] = pa.Field()
-    eval_hard_budget: Series[pd.Float64Dtype] = pa.Field(nullable=True, ge=0)
-    eval_soft_budget_param: Series[pd.Float64Dtype] = pa.Field(nullable=True)
+    initializer: Series[pl.String] = pa.Field()
+    train_seed: Series[pl.UInt64] = pa.Field(nullable=True)
+    train_hard_budget: Series[pl.Float64] = pa.Field(nullable=True, ge=0)
+    train_soft_budget_param: Series[pl.Float64] = pa.Field(nullable=True)
+    eval_seed: Series[pl.UInt64] = pa.Field()
+    eval_hard_budget: Series[pl.Float64] = pa.Field(nullable=True, ge=0)
+    eval_soft_budget_param: Series[pl.Float64] = pa.Field(nullable=True)
 
     @pa.dataframe_check
     @classmethod
-    def constant_identity(cls, frame: pd.DataFrame) -> bool:
-        return len(frame[list(IDENTITY_DTYPES)].drop_duplicates()) <= 1
+    def constant_identity(cls, data: pa.PolarsData) -> bool:
+        return (
+            data.lazyframe.select(list(IDENTITY_DTYPES))
+            .unique()
+            .collect()
+            .height
+            <= 1
+        )

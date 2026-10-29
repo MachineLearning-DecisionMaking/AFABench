@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 import torch
 
@@ -25,17 +25,24 @@ DROPPED_ROWS = sorted([*PLACEHOLDER_ROWS, *OUTLIER_ROWS])
 def write_source(path: Path) -> Path:
     """Write a MiniBooNE-like CSV whose first feature is the source row number."""
     rng = np.random.default_rng(0)
-    frame = pd.DataFrame(
+    frame = pl.DataFrame(
         rng.normal(size=(N_ROWS, N_FEATURES)),
-        columns=[f"Feature {i + 1}" for i in range(N_FEATURES)],
+        schema=[f"Feature {i + 1}" for i in range(N_FEATURES)],
     )
-    frame["Feature 1"] = np.arange(N_ROWS, dtype=float)
-    for row in PLACEHOLDER_ROWS:
-        frame.iloc[row] = -999.0
+    frame = frame.with_columns(
+        pl.Series("Feature 1", np.arange(N_ROWS, dtype=float))
+    )
+    frame = frame.with_columns(
+        pl.when(~pl.int_range(pl.len()).is_in(PLACEHOLDER_ROWS))
+        .then(pl.all())
+        .otherwise(-999.0)
+    )
     for row, value in OUTLIER_ROWS.items():
-        frame.loc[row, "Feature 20"] = value
-    frame["Outcome"] = [i % 2 for i in range(N_ROWS)]
-    frame.to_csv(path, index=False)
+        frame[row, "Feature 20"] = value
+    frame = frame.with_columns(
+        pl.Series("Outcome", [i % 2 for i in range(N_ROWS)])
+    )
+    frame.write_csv(path)
     return path
 
 
@@ -99,3 +106,19 @@ def test_split_bundles_keep_source_rows(tmp_path: Path, split: str) -> None:
     expected = torch.tensor(kept_rows())[bundle.get_generation_indices()]
     assert source_rows.tolist() == expected.tolist()
     assert not set(source_rows.tolist()) & set(DROPPED_ROWS)
+
+
+def test_missing_non_outlier_feature_keeps_its_source_row(
+    tmp_path: Path,
+) -> None:
+    source = write_source(tmp_path / "m.csv")
+    frame = pl.read_csv(source)
+    frame[2, "Feature 2"] = None
+    frame.write_csv(source)
+    dataset = MiniBooNEDataset(
+        root=str(source),
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    )
+
+    assert dataset.get_source_rows().tolist() == kept_rows()
+    assert float(dataset.features[2, 1]) == pytest.approx(0, abs=1e-6)

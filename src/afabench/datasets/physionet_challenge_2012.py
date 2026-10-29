@@ -1,14 +1,30 @@
 import io
 import tarfile
 from pathlib import Path
-from typing import ClassVar, cast, final, override
+from typing import ClassVar, final, override
 
-import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.datasets import tabular_csv
-from afabench.datasets.tabular_csv import TabularCSVDataset, check_sha256
+from afabench.datasets.tabular_csv import (
+    TabularCSVDataset,
+    check_sha256,
+    prepared_csv_bytes,
+)
+
+
+def _byte_stable_parameter_means(frame: pl.DataFrame) -> pl.DataFrame:
+    # ADR 0014 pins decimal CSV bytes: Polars' parallel mean changes the
+    # last digit for some stays. Keep only this reduction at the boundary.
+    import pandas as pd  # noqa: PLC0415
+
+    means = (
+        pd.DataFrame(frame.to_dict(as_series=False))
+        .groupby("Parameter")["Value"]
+        .mean()
+    )
+    return pl.from_pandas(means.reset_index())
 
 
 @final
@@ -80,21 +96,25 @@ class PhysionetChallenge2012Dataset(TabularCSVDataset):
     @classmethod
     @override
     def make_prepared_source(cls) -> bytes:
-        stays: list[pd.Series] = []
-        deaths: list[int] = []
+        stays: list[pl.DataFrame] = []
+        deaths: list[float] = []
         for letter in cls.SETS:
-            outcomes = pd.read_csv(
+            outcomes = pl.read_csv(
                 io.BytesIO(cls._raw_file(f"Outcomes-{letter}.txt"))
-            ).set_index("RecordID")["In-hospital_death"]
+            )
+            mortality = dict(
+                outcomes.select("RecordID", "In-hospital_death").iter_rows()
+            )
             records = cls._records(cls._raw_file(f"set-{letter}.tar.gz"))
             for name in sorted(records):
                 record_id = int(name.removesuffix(".txt"))
-                stays.append(cls._stay_means(records[name], record_id))
-                deaths.append(int(outcomes.loc[record_id]))
-        # Parameters appear in the order the stays first record them
-        frame = pd.DataFrame(stays).astype(float).reset_index(drop=True)
-        frame["Outcome"] = np.array(deaths, dtype=float)
-        return frame.to_csv(index=False).encode()
+                stays.append(cls._stay_means(records[name]))
+                deaths.append(float(mortality[record_id]))
+        # Parameters appear in the order the stays first record them.
+        frame = pl.concat(stays, how="diagonal").with_columns(
+            pl.Series("Outcome", deaths)
+        )
+        return prepared_csv_bytes(frame)
 
     @staticmethod
     def _records(archive: bytes) -> dict[str, bytes]:
@@ -108,13 +128,26 @@ class PhysionetChallenge2012Dataset(TabularCSVDataset):
         return records
 
     @classmethod
-    def _stay_means(cls, record: bytes, record_id: int) -> pd.Series:
-        """Return each parameter's mean over a stay's record, the general descriptors included."""
-        frame = pd.read_csv(io.BytesIO(record))
-        values = cast(
-            "pd.Series", pd.to_numeric(frame["Value"], errors="coerce")
+    def _stay_means(cls, record: bytes) -> pl.DataFrame:
+        """Return each parameter's mean, the general descriptors included."""
+        frame = (
+            pl.read_csv(io.BytesIO(record))
+            .with_columns(
+                pl.col("Value").cast(pl.Float64, strict=False).fill_nan(None)
+            )
+            .with_columns(
+                pl.when(pl.col("Value") == cls.MISSING)
+                .then(None)
+                .otherwise(pl.col("Value"))
+                .alias("Value")
+            )
         )
-        frame["Value"] = values.mask(values == cls.MISSING)
-        means = cast("pd.Series", frame.groupby("Parameter")["Value"].mean())
-        means.name = record_id
-        return means.drop(index="RecordID", errors="ignore")
+        means = _byte_stable_parameter_means(
+            frame.filter(pl.col("Parameter") != "RecordID").select(
+                "Parameter", "Value"
+            )
+        )
+        return pl.DataFrame(
+            {name: [value] for name, value in means.iter_rows()},
+            schema_overrides=dict.fromkeys(means["Parameter"], pl.Float64),
+        )

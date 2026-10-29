@@ -1,4 +1,4 @@
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.core.types import (
@@ -24,7 +24,7 @@ def process_batch_wrapper(
     true_label: Label | None = None,
     selection_budget: float | None = None,
     selection_costs: list[float] | None = None,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     if features is None:
         features = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
     assert features.ndim == 2, "Only 1D features with batch dim supported"
@@ -70,28 +70,26 @@ def process_batch_wrapper(
     )
 
 
-def add_time_column(df: pd.DataFrame) -> pd.DataFrame:
-    return df.assign(time=df["step"])
+def add_time_column(df: pl.DataFrame) -> pl.DataFrame:
+    return df.with_columns(pl.col("step").alias("time"))
 
 
 def assert_predictions(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     idx: int,
     expected_predictions: list[int],
     prediction_type: str,
 ) -> None:
     if prediction_type not in {"external", "builtin"}:
         raise ValueError(prediction_type)
-    probabilities = df[df["episode_id"] == idx].sort_values("time")[
+    probabilities = df.filter(pl.col("episode_id") == idx).sort("time")[
         f"{prediction_type}_predicted_probabilities"
     ]
-    # The deterministic predict fn returns one-hot vectors.
-    predictions = probabilities.map(
-        lambda vector: max(range(len(vector)), key=vector.__getitem__)
-    )
-    assert (predictions == expected_predictions).all(), (
-        f"Expected {predictions.tolist()} and {expected_predictions} to be equal."
-    )
+    predictions = [
+        max(range(len(vector)), key=vector.__getitem__)
+        for vector in probabilities.to_list()
+    ]
+    assert predictions == expected_predictions
 
 
 def test_compact_episode_rows() -> None:
@@ -119,8 +117,8 @@ def test_steps_count_repeated_selections_not_observed_features() -> None:
         initial_masked_features=torch.tensor([[1.0, 0.0]]),
         true_label=torch.tensor([[1.0, 0.0]]),
     )
-    assert result["step"].tolist() == [0, 1, 2]
-    assert reconstruct_selection_history(result).tolist() == [[], [1], [1, 1]]
+    assert result["step"].to_list() == [0, 1, 2]
+    assert reconstruct_selection_history(result).to_list() == [[], [1], [1, 1]]
 
 
 def test_expected_length() -> None:
@@ -131,8 +129,8 @@ def test_expected_length() -> None:
     df = process_batch_wrapper(features=features, actions=actions)
 
     # With 3 features, we should have 4 rows for each sample. We make one prediction at 0 features, 1 feature, 2 features, and 3 features
-    assert len(df[df["episode_id"] == 0]) == 4
-    assert len(df[df["episode_id"] == 1]) == 4
+    assert len(df.filter(pl.col("episode_id") == 0)) == 4
+    assert len(df.filter(pl.col("episode_id") == 1)) == 4
     assert len(df) == 8
 
 
@@ -183,11 +181,10 @@ def test_budget_forces_a_stop_and_records_it() -> None:
     )
 
     for idx in (0, 1):
-        sample = df[df["episode_id"] == idx].sort_values("time")
-        assert sample["action_performed"].tolist() == [1, 2, 0]
-        assert sample["accumulated_cost"].tolist() == [1.0, 2.0, 2.0]
-        # Only the row whose action was overridden is a forced stop.
-        assert sample["forced_stop"].tolist() == [False, False, True]
+        sample = df.filter(pl.col("episode_id") == idx).sort("time")
+        assert sample["action_performed"].to_list() == [1, 2, 0]
+        assert sample["accumulated_cost"].to_list() == [1.0, 2.0, 2.0]
+        assert sample["forced_stop"].to_list() == [False, False, True]
 
 
 def test_non_unit_costs_accumulate_and_bound_the_episode() -> None:
@@ -205,10 +202,10 @@ def test_non_unit_costs_accumulate_and_bound_the_episode() -> None:
             selection_budget=6,
             selection_costs=costs,
         )
-    ).sort_values("time")
-    assert within["action_performed"].tolist() == [1, 2, 3, 0]
-    assert within["accumulated_cost"].tolist() == [1.0, 4.0, 6.0, 6.0]
-    assert within["forced_stop"].tolist() == [False, False, False, True]
+    ).sort("time")
+    assert within["action_performed"].to_list() == [1, 2, 3, 0]
+    assert within["accumulated_cost"].to_list() == [1.0, 4.0, 6.0, 6.0]
+    assert within["forced_stop"].to_list() == [False, False, False, True]
 
     beyond = add_time_column(
         process_batch_wrapper(
@@ -217,9 +214,9 @@ def test_non_unit_costs_accumulate_and_bound_the_episode() -> None:
             selection_budget=5,
             selection_costs=costs,
         )
-    ).sort_values("time")
-    assert beyond["action_performed"].tolist() == [1, 2, 0]
-    assert beyond["accumulated_cost"].tolist() == [1.0, 4.0, 4.0]
+    ).sort("time")
+    assert beyond["action_performed"].to_list() == [1, 2, 0]
+    assert beyond["accumulated_cost"].to_list() == [1.0, 4.0, 4.0]
 
 
 def test_samples_that_stop_at_different_times_keep_their_own_history() -> None:
@@ -268,13 +265,13 @@ def test_samples_that_stop_at_different_times_keep_their_own_history() -> None:
         )
     )
 
-    df["prev_selections_performed"] = reconstruct_selection_history(df)
-    first = df[df["episode_id"] == 0].sort_values("time")
-    second = df[df["episode_id"] == 1].sort_values("time")
-    assert first["action_performed"].tolist() == [1, 2, 0]
-    assert second["action_performed"].tolist() == [3, 4, 2, 0]
-    assert first["prev_selections_performed"].tolist() == [[], [0], [0, 1]]
-    assert second["prev_selections_performed"].tolist() == [
+    df = df.with_columns(reconstruct_selection_history(df))
+    first = df.filter(pl.col("episode_id") == 0).sort("time")
+    second = df.filter(pl.col("episode_id") == 1).sort("time")
+    assert first["action_performed"].to_list() == [1, 2, 0]
+    assert second["action_performed"].to_list() == [3, 4, 2, 0]
+    assert first["prev_selections_performed"].to_list() == [[], [0], [0, 1]]
+    assert second["prev_selections_performed"].to_list() == [
         [],
         [2],
         [2, 3],

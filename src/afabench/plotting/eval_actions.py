@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+import polars as pl
 from jaxtyping import Float
 from tqdm import tqdm
 
@@ -21,7 +22,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    import pandas as pd
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
 
@@ -35,7 +35,7 @@ HEATMAP_COLUMNS = 5
 
 
 def normalize_heatmap_by_timestep(
-    df_method: pd.DataFrame,
+    df_method: pl.DataFrame,
     max_action: int,
     max_time: int,
 ) -> Heatmap:
@@ -48,8 +48,8 @@ def normalize_heatmap_by_timestep(
     """
     heatmap = np.zeros((int(max_action), int(max_time) + 1))
 
-    actions = df_method["action_performed"].to_numpy(dtype=np.int64)
-    time_steps = df_method["n_selections_performed"].to_numpy(dtype=np.int64)
+    actions = df_method["action_performed"].cast(pl.Int64).to_numpy()
+    time_steps = df_method["n_selections_performed"].cast(pl.Int64).to_numpy()
     # Skip action 0
     taken = actions > 0
     np.add.at(heatmap, (actions[taken] - 1, time_steps[taken]), 1)
@@ -89,7 +89,7 @@ def format_heatmap_axes(
 
 
 def action_heatmap_figure(
-    group_df: pd.DataFrame,
+    group_df: pl.DataFrame,
     methods: Sequence[str],
     title: str,
     plotting_config: PlottingDisplayConfig,
@@ -115,7 +115,7 @@ def action_heatmap_figure(
 
     for idx, method in enumerate(methods):
         ax = axes[idx // HEATMAP_COLUMNS, idx % HEATMAP_COLUMNS]
-        df_method = group_df.loc[group_df["afa_method"] == method]
+        df_method = group_df.filter(pl.col("afa_method") == method)
 
         heatmap = normalize_heatmap_by_timestep(
             df_method, global_max_action, global_max_time
@@ -146,7 +146,7 @@ def action_heatmap_figure(
 
 
 def save_action_heatmaps(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     output_folder: Path,
     budget_type: str,
     plotting_config: PlottingDisplayConfig,
@@ -165,7 +165,7 @@ def save_action_heatmaps(
         formats: Output formats (e.g. ("pdf", "svg")). Default: ("pdf",)
     """
     # Filter out action 0
-    filtered_df = df.loc[df["action_performed"] != 0]
+    filtered_df = df.filter(pl.col("action_performed") != 0)
     # Group by dataset and budget (and method for soft budget)
     if budget_type == "hard_budget":
         group_cols = ["dataset", "eval_hard_budget"]
@@ -173,14 +173,14 @@ def save_action_heatmaps(
         group_cols = ["dataset", "afa_method", "soft_budget_param"]
 
     for group_keys, group_df in tqdm(
-        filtered_df.groupby(group_cols, dropna=False),
+        filtered_df.group_by(group_cols, maintain_order=True),
         desc=f"Creating separate {budget_type} plots",
     ):
         if budget_type == "hard_budget":
             dataset_name, hard_budget = group_keys
             extra_title = f"Hard Budget: {hard_budget}"
             filename_suffix = f"_{hard_budget}"
-            methods = sorted(group_df["afa_method"].unique())
+            methods = sorted(group_df["afa_method"].unique().to_list())
             method_filename = ""
         else:
             dataset_name, method_name, soft_budget_param = group_keys
@@ -213,7 +213,7 @@ def save_action_heatmaps(
 
 
 def save_all_action_heatmaps(
-    table: pd.DataFrame,
+    table: pl.DataFrame,
     output_folder: Path,
     plotting_config: PlottingDisplayConfig,
     formats: Sequence[str] = ("pdf",),
@@ -237,14 +237,14 @@ def save_all_action_heatmaps(
         }
     ):
         save_action_heatmaps(
-            df=table.loc[table["eval_hard_budget"].notna()],
+            df=table.filter(pl.col("eval_hard_budget").is_not_null()),
             output_folder=hard_budget_folder,
             budget_type="hard_budget",
             plotting_config=plotting_config,
             formats=formats,
         )
         save_action_heatmaps(
-            df=table.loc[table["soft_budget_param"].notna()],
+            df=table.filter(pl.col("soft_budget_param").is_not_null()),
             output_folder=soft_budget_folder,
             budget_type="soft_budget",
             plotting_config=plotting_config,

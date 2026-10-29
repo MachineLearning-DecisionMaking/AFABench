@@ -144,7 +144,7 @@ def main(
         raise typer.Exit(1) from None
     estimate = estimate_compute(plan.scheduled_jobs, table)
     if output is not None:
-        per_job_table(estimate).to_csv(output, index=False)
+        per_job_table(estimate).write_csv(output)
     typer.echo(
         format_report(
             estimate, source=_described_source(job_durations), by=grouping

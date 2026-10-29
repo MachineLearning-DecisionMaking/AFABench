@@ -25,10 +25,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+import polars as pl
 import pytest
 import yaml
 from click.testing import Result
+from polars.testing import assert_frame_equal
 from typer.testing import CliRunner
 
 from afabench.release.manifest import ExecutionMode, read_release_manifest
@@ -367,7 +368,7 @@ def test_comparison_holds_each_published_row_once_on_every_dataset(
 ) -> None:
     assert journey.run.returncode == 0
     output = journey.forked / "output/smoke"
-    merged = pd.read_parquet(
+    merged = pl.read_parquet(
         output / f"merged_results/{EVAL_PERF}/{COMPARISON}+all.parquet"
     )
 
@@ -378,8 +379,8 @@ def test_comparison_holds_each_published_row_once_on_every_dataset(
     }
     published = journey.published / "output/smoke"
     for method in PUBLISHED_METHODS:
-        restored = pd.concat(
-            pd.read_parquet(path)
+        restored = pl.concat(
+            pl.read_parquet(path)
             for path in sorted(
                 (
                     published / f"eval_results_transformed/eval_split-test/"
@@ -391,14 +392,14 @@ def test_comparison_holds_each_published_row_once_on_every_dataset(
             merged["dataset"] == "cube"
         )
         assert on_cube.sum() == len(restored)
-    dummy = merged.loc[merged["afa_method"] == "random_dummy"]
-    hard_budget = dummy["eval_hard_budget"].notna()
-    soft_budget = dummy["train_soft_budget_param"].notna()
+    dummy = merged.filter(pl.col("afa_method") == "random_dummy")
+    hard_budget = dummy["eval_hard_budget"].is_not_null()
+    soft_budget = dummy["train_soft_budget_param"].is_not_null()
     assert hard_budget.any()
     assert soft_budget.any()
     assert not (hard_budget & soft_budget).any()
     for classifier in ["builtin", "external"]:
-        split = pd.read_parquet(
+        split = pl.read_parquet(
             output / f"merged_results/{EVAL_PERF}/"
             f"{COMPARISON}+classifier_type-{classifier}.parquet"
         )
@@ -450,9 +451,9 @@ def test_results_only_journey_needs_no_afabench_loading(
             hosted = journey.transport.files[
                 f"releases/{RELEASE_ID}/output/{table[key]}"
             ]
-            pd.testing.assert_frame_equal(
-                pd.read_parquet(destination / table[key]),
-                pd.read_parquet(io.BytesIO(hosted)),
+            assert_frame_equal(
+                pl.read_parquet(destination / table[key]),
+                pl.read_parquet(io.BytesIO(hosted)),
             )
     # Plots open in any viewer: plain PDF and SVG files.
     for suffix, header in [(".pdf", b"%PDF"), (".svg", b"<?xml")]:

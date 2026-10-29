@@ -1,6 +1,6 @@
 from typing import ClassVar, final, override
 
-import pandas as pd
+import polars as pl
 from ucimlrepo import fetch_ucirepo
 
 from afabench.datasets.uci import UCIDataset
@@ -16,16 +16,16 @@ class CKDDataset(UCIDataset):
 
     @classmethod
     @override
-    def _fetch_uci(cls) -> pd.DataFrame:
+    def _fetch_uci(cls) -> pl.DataFrame:
         ckd_data = fetch_ucirepo(id=336)
         assert ckd_data is not None
         assert ckd_data.data is not None
-        features_df = ckd_data.data.features.copy()
-        target_df = ckd_data.data.targets.copy()
-        target_series = (
-            target_df.iloc[:, 0].astype(str).str.strip().str.lower()
+        features = pl.from_pandas(ckd_data.data.features)
+        target = pl.from_pandas(ckd_data.data.targets).to_series(0)
+        target = (
+            target.cast(pl.String)
+            .str.strip_chars()
+            .str.to_lowercase()
+            .replace_strict({"ckd": 1, "notckd": 0}, default=None)
         )
-        target_series = target_series.map({"ckd": 1, "notckd": 0})
-        df_data = features_df.copy()
-        df_data["target"] = target_series.to_numpy()
-        return df_data
+        return features.with_columns(target.alias("target"))

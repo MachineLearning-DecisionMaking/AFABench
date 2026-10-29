@@ -17,10 +17,10 @@ fully determined by the inputs below.
 from collections.abc import Callable
 from typing import Any
 
-import pandas as pd
+import polars as pl
 import pytest
 import torch
-from pandas.testing import assert_frame_equal
+from polars.testing import assert_frame_equal
 
 from afabench.core.class_probabilities import as_class_probability_fn
 from afabench.core.types import (
@@ -139,8 +139,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 
 
 def run_scenario(
-    process_batch_fn: Callable[..., pd.DataFrame], scenario: str
-) -> pd.DataFrame:
+    process_batch_fn: Callable[..., pl.DataFrame], scenario: str
+) -> pl.DataFrame:
     """Run `process_batch_fn` on the fixed batch with `scenario`'s settings."""
     settings = SCENARIOS[scenario]
     initial_masked_features = FEATURES.clone()
@@ -255,25 +255,34 @@ GOLDEN_RECORDS: dict[str, list[tuple[Any, ...]]] = {
 
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
 def test_records_match_dev_implementation(scenario: str) -> None:
-    expected = pd.DataFrame.from_records(
-        GOLDEN_RECORDS[scenario], columns=COLUMNS
-    )
+    expected = pl.DataFrame(
+        GOLDEN_RECORDS[scenario], schema=COLUMNS, orient="row"
+    ).with_columns(pl.col("builtin_predicted_class").cast(pl.Int64))
     compact = run_scenario(process_batch, scenario)
-    assert compact["step"].tolist() == [
+    assert compact["step"].to_list() == [
         len(record[0]) for record in GOLDEN_RECORDS[scenario]
     ]
     # The legacy records stored argmax class decisions, not probabilities.
-    actual = compact.assign(
-        prev_selections_performed=reconstruct_selection_history(compact),
-        **{
-            f"{classifier}_predicted_class": [
-                None
-                if vector is None
-                else max(range(len(vector)), key=vector.__getitem__)
-                for vector in compact[f"{classifier}_predicted_probabilities"]
-            ]
-            for classifier in ["builtin", "external"]
-        },
-    ).rename(columns={"episode_id": "idx"})
-    actual = actual[COLUMNS]
-    assert_frame_equal(actual, expected, check_exact=True, check_dtype=True)
+    actual = (
+        compact.with_columns(
+            reconstruct_selection_history(compact),
+            *[
+                pl.Series(
+                    f"{classifier}_predicted_class",
+                    [
+                        None
+                        if vector is None
+                        else max(range(len(vector)), key=vector.__getitem__)
+                        for vector in compact[
+                            f"{classifier}_predicted_probabilities"
+                        ].to_list()
+                    ],
+                    dtype=pl.Int64,
+                )
+                for classifier in ["builtin", "external"]
+            ],
+        )
+        .rename({"episode_id": "idx"})
+        .select(COLUMNS)
+    )
+    assert_frame_equal(actual, expected, check_exact=True, check_dtypes=True)

@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 
 from afabench.core.bundle_system.bundle import compute_content_hash
 from afabench.core.job_record import ExitStatus, JobIdentity
@@ -74,7 +74,7 @@ def provenance(
             afabench_version=None,
             torch_version="2",
             numpy_version="2",
-            pandas_version="2",
+            polars_version="2",
             lockfile_sha256=None,
             platform="test",
         ),
@@ -194,16 +194,18 @@ class Evaluation:
         }
 
 
-def raw_table(evaluation: Evaluation) -> pd.DataFrame:
+def raw_table(evaluation: Evaluation) -> pl.DataFrame:
     """One forced-stop episode with external predictions only."""
-    frame = pd.DataFrame(
+    frame = pl.DataFrame(
         {
             "episode_id": [0, 0],
             "generation_index": [5, 5],
             "split_index": [0, 0],
             "step": [0, 1],
             "action_performed": [3, 0],
-            "builtin_predicted_probabilities": [None, None],
+            "builtin_predicted_probabilities": pl.Series(
+                [None, None], dtype=pl.List(pl.Float64)
+            ),
             "external_predicted_probabilities": [[0.25, 0.75], [0.75, 0.25]],
             "true_class": [0, 0],
             "accumulated_cost": [1.0, 1.0],
@@ -213,14 +215,14 @@ def raw_table(evaluation: Evaluation) -> pd.DataFrame:
     return _with_identity(frame, evaluation)
 
 
-def transformed_table(evaluation: Evaluation, content: str) -> pd.DataFrame:
+def transformed_table(evaluation: Evaluation, content: str) -> pl.DataFrame:
     """One external prediction; column `release` holds `content`."""
-    frame = pd.DataFrame(
+    frame = pl.DataFrame(
         {
             "classifier": ["external"],
             "predicted_probabilities": [[0.25, 0.75]],
-            "true_class": pd.array([0], dtype="UInt64"),
-            "n_selections_performed": pd.array([1], dtype="UInt64"),
+            "true_class": pl.Series([0], dtype=pl.UInt64),
+            "n_selections_performed": pl.Series([1], dtype=pl.UInt64),
             "release": [content],
         }
     )
@@ -228,18 +230,12 @@ def transformed_table(evaluation: Evaluation, content: str) -> pd.DataFrame:
 
 
 def _with_identity(
-    frame: pd.DataFrame, evaluation: Evaluation
-) -> pd.DataFrame:
-    # One concatenation; assigning column by column is slow enough to
-    # matter for the catalogs the release tests write.
-    identity = pd.DataFrame(
-        {
-            name: pd.array([value] * len(frame), dtype=IDENTITY_DTYPES[name])
-            for name, value in evaluation.identity().items()
-        },
-        index=frame.index,
+    frame: pl.DataFrame, evaluation: Evaluation
+) -> pl.DataFrame:
+    return frame.with_columns(
+        pl.Series(name, [value] * len(frame), dtype=IDENTITY_DTYPES[name])
+        for name, value in evaluation.identity().items()
     )
-    return pd.concat([frame, identity], axis=1)
 
 
 def write_evaluation(

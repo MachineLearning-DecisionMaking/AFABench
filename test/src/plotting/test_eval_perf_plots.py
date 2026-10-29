@@ -1,7 +1,7 @@
 from dataclasses import replace
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -11,8 +11,11 @@ from afabench.evaluation.tables import load_plotting_ready_table
 from afabench.plotting.config import PlotEvalPerfConfig, PlottingDisplayConfig
 from afabench.plotting.eval_perf import (
     EvaluationPlotter,
+    add_metric_column,
     get_normal_hard_budget_plot,
     get_per_dataset_plot,
+    process_df_every_action,
+    process_df_only_stop_action_and_valid_prediction,
 )
 from scripts.plotting.plot_eval_perf import main
 
@@ -132,8 +135,9 @@ def eval_perf_path(tmp_path: Path) -> Path:
     return path
 
 
-def sorted_rows(df: object, *keys: str) -> list[dict[str, object]]:
-    rows = pa.table(df).to_pylist()
+def sorted_rows(df: pl.DataFrame, *keys: str) -> list[dict[str, object]]:
+    assert isinstance(df, pl.DataFrame)
+    rows = df.to_dicts()
     return sorted(rows, key=lambda row: tuple(str(row[key]) for key in keys))
 
 
@@ -180,7 +184,7 @@ def test_stop_action_metrics_are_aggregated_over_seeds(
             "dataset": "cube",
             "eval_hard_budget": 1.0,
             "soft_budget_param": None,
-            "mean_auroc": None,
+            "mean_auroc": pytest.approx(float("nan"), nan_ok=True),
             "std_auroc": None,
             "mean_accuracy": 0.0,
             "std_accuracy": None,
@@ -244,7 +248,7 @@ def test_per_time_step_metrics_use_largest_hard_budget_per_dataset(
         "soft_budget_param": None,
     }
     wrong_once = {
-        "mean_auroc": None,
+        "mean_auroc": pytest.approx(float("nan"), nan_ok=True),
         "std_auroc": None,
         "mean_accuracy": 0.0,
         "std_accuracy": None,
@@ -261,8 +265,8 @@ def test_per_time_step_metrics_use_largest_hard_budget_per_dataset(
         shared
         | {
             "n_selections_performed": 2,
-            "mean_auroc": None,
-            "std_auroc": None,
+            "mean_auroc": pytest.approx(float("nan"), nan_ok=True),
+            "std_auroc": pytest.approx(float("nan"), nan_ok=True),
             "mean_accuracy": 1.0,
             "std_accuracy": 0.0,
             "mean_f_score": 1.0,
@@ -363,14 +367,14 @@ def test_dataset_metric_selection_supports_auroc_and_f1(
         load_plotting_ready_table(eval_perf_path), tmp_path, config
     )
     assert plotter.df_stop_action is not None
-    cube = plotter.df_stop_action.query("dataset == 'cube'").sort_values(
+    cube = plotter.df_stop_action.filter(pl.col("dataset") == "cube").sort(
         "eval_hard_budget"
     )
-    assert cube["mean_metric"].isna().tolist() == [True, False]
-    assert cube.iloc[1]["mean_metric"] == pytest.approx(0.75)
-    assert cube.iloc[1]["std_metric"] == pytest.approx(0.5 * SQRT_HALF)
-    mnist = plotter.df_stop_action.query("dataset == 'mnist'")
-    assert mnist.iloc[0]["mean_metric"] == pytest.approx(1 / 3)
+    assert cube["mean_metric"].is_nan().to_list() == [True, False]
+    assert cube["mean_metric"][1] == pytest.approx(0.75)
+    assert cube["std_metric"][1] == pytest.approx(0.5 * SQRT_HALF)
+    mnist = plotter.df_stop_action.filter(pl.col("dataset") == "mnist")
+    assert mnist["mean_metric"][0] == pytest.approx(1 / 3)
     plot = get_normal_hard_budget_plot(plotter.df_stop_action, config)
     assert set(plot.data["dataset"]) == {"Cube (AUROC)", "MNIST (F1)"}
 
@@ -388,7 +392,7 @@ def test_invalid_metric_selection_names_the_bad_value(
 def test_per_dataset_figure_facets_classifiers_and_all_metrics(
     plotting_config: PlottingDisplayConfig,
 ) -> None:
-    summary = pd.DataFrame(
+    summary = pl.DataFrame(
         [
             {
                 "dataset": "cube",
@@ -413,14 +417,21 @@ def test_per_dataset_figure_facets_classifiers_and_all_metrics(
         summary, "eval_hard_budget", "Hard budget", plotting_config
     )
     assert set(plot.data["metric"]) == {"Accuracy", "Macro F1", "AUROC"}
-    builtin = plot.data.query("classifier == 'Built-in classifier'")
+    builtin = plot.data.filter(pl.col("classifier") == "Built-in classifier")
     assert set(builtin["afa_method"]) == {"JAFA"}
-    assert builtin.query("metric == 'Accuracy'").iloc[0]["mean_metric"] == 0.5
-    assert builtin.query("metric == 'AUROC'")["mean_metric"].isna().all()
-    external = plot.data.query(
-        "classifier == 'External classifier' and metric == 'AUROC'"
+    assert (
+        builtin.filter(pl.col("metric") == "Accuracy")["mean_metric"][0] == 0.5
     )
-    assert external["mean_metric"].tolist() == [0.9, 0.8]
+    assert (
+        builtin.filter(pl.col("metric") == "AUROC")["mean_metric"]
+        .is_nan()
+        .all()
+    )
+    external = plot.data.filter(
+        (pl.col("classifier") == "External classifier")
+        & (pl.col("metric") == "AUROC")
+    )
+    assert external["mean_metric"].to_list() == [0.9, 0.8]
     # Drawing observes the actual facet layout and axis sharing.
     figure = plot.draw()
     assert len(figure.axes) == 6
@@ -432,7 +443,7 @@ def test_per_dataset_figure_facets_classifiers_and_all_metrics(
 def test_per_dataset_figure_omits_unavailable_builtin_row(
     plotting_config: PlottingDisplayConfig,
 ) -> None:
-    summary = pd.DataFrame(
+    summary = pl.DataFrame(
         [
             {
                 "dataset": "cube",
@@ -460,19 +471,21 @@ def test_per_dataset_families_are_additional_and_keep_budget_variants(
     tmp_path: Path,
     plotting_config: PlottingDisplayConfig,
 ) -> None:
-    table = load_plotting_ready_table(eval_perf_path).assign(
-        classifier="external"
+    table = load_plotting_ready_table(eval_perf_path).with_columns(
+        pl.lit("external").alias("classifier")
     )
     # Only JAFA has built-in results; these must not affect headline summaries.
-    builtin = table.loc[table["afa_method"] == "jafa"].assign(
-        classifier="builtin",
+    builtin = table.filter(pl.col("afa_method") == "jafa").with_columns(
+        pl.lit("builtin").alias("classifier"),
+        pl.lit([0.9, 0.1]).alias("predicted_probabilities"),
     )
-    builtin["predicted_probabilities"] = [[0.9, 0.1]] * len(builtin)
-    unavailable = table.loc[table["afa_method"] == "gdfs"].assign(
-        classifier="builtin",
-        predicted_probabilities=None,
+    unavailable = table.filter(pl.col("afa_method") == "gdfs").with_columns(
+        pl.lit("builtin").alias("classifier"),
+        pl.lit(None, dtype=pl.List(pl.Float64)).alias(
+            "predicted_probabilities"
+        ),
     )
-    both = pd.concat([table, builtin, unavailable], ignore_index=True)
+    both = pl.concat([table, builtin, unavailable])
     output = tmp_path / "usual"
     additional = tmp_path / "per_dataset"
     plotter = EvaluationPlotter(
@@ -508,14 +521,14 @@ def test_plotting_script_opt_in_reads_unsplit_classifier_source(
     tmp_path: Path,
     plotting_config: PlottingDisplayConfig,
 ) -> None:
-    table = load_plotting_ready_table(eval_perf_path).assign(
-        classifier="external"
+    table = load_plotting_ready_table(eval_perf_path).with_columns(
+        pl.lit("external").alias("classifier")
     )
-    builtin = table.loc[table["afa_method"] == "jafa"].assign(
-        classifier="builtin"
+    builtin = table.filter(pl.col("afa_method") == "jafa").with_columns(
+        pl.lit("builtin").alias("classifier")
     )
     both_path = tmp_path / "both.parquet"
-    pd.concat([table, builtin]).to_parquet(both_path)
+    pl.concat([table, builtin]).write_parquet(both_path)
     config = PlotEvalPerfConfig(
         input=str(eval_perf_path),
         output_folder=str(tmp_path / "usual"),
@@ -542,8 +555,8 @@ def test_per_dataset_output_cannot_overlap_usual_directory(
     plotting_config: PlottingDisplayConfig,
     relative: str,
 ) -> None:
-    table = load_plotting_ready_table(eval_perf_path).assign(
-        classifier="external"
+    table = load_plotting_ready_table(eval_perf_path).with_columns(
+        pl.lit("external").alias("classifier")
     )
     plotter = EvaluationPlotter(table, tmp_path / "usual", plotting_config)
     with pytest.raises(ValueError, match=r"overlap.*usual"):
@@ -576,3 +589,115 @@ def test_default_display_metrics_preserve_headline_choices() -> None:
     assert script.per_dataset_plots is False
     assert script.per_dataset_input is None
     assert script.per_dataset_output_folder is None
+
+
+def test_metric_columns_are_selected_without_changing_the_input(
+    plotting_config: PlottingDisplayConfig,
+) -> None:
+    summary = pl.DataFrame(
+        {
+            "dataset": ["cube", "mnist", "other"],
+            "mean_accuracy": [0.75, 0.6, 0.8],
+            "std_accuracy": [0.1, 0.2, None],
+            "mean_f_score": [0.5, 0.4, 0.7],
+            "std_f_score": [0.2, 0.3, None],
+            "mean_auroc": [None, 0.9, 0.8],
+            "std_auroc": [None, 0.1, None],
+        }
+    )
+    config = replace(
+        plotting_config,
+        dataset_metrics={"cube": "auroc", "mnist": "f1"},
+    )
+
+    selected = add_metric_column(summary, config)
+
+    assert isinstance(selected, pl.DataFrame)
+    assert selected["mean_metric"].to_list() == [None, 0.4, 0.8]
+    assert selected["std_metric"].to_list() == [None, 0.3, None]
+    assert "mean_metric" not in summary.columns
+    empty = add_metric_column(summary.clear(), config)
+    assert empty.is_empty()
+    assert empty.schema == selected.schema
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_unavailable_predictions_have_no_plot_summaries(
+    plotting_config: PlottingDisplayConfig,
+    empty: bool,
+) -> None:
+    table = pl.DataFrame(
+        {
+            "action_performed": [0, None, 1],
+            "predicted_probabilities": [None, None, None],
+        },
+        schema={
+            "action_performed": pl.UInt64,
+            "predicted_probabilities": pl.List(pl.Float64),
+        },
+    )
+    if empty:
+        table = table.clear()
+
+    assert (
+        process_df_only_stop_action_and_valid_prediction(
+            table, plotting_config
+        )
+        is None
+    )
+    assert process_df_every_action(table, plotting_config) is None
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_plotter_without_predictions_writes_no_figures(
+    eval_perf_path: Path,
+    tmp_path: Path,
+    plotting_config: PlottingDisplayConfig,
+    empty: bool,
+) -> None:
+    table = load_plotting_ready_table(eval_perf_path).with_columns(
+        pl.lit(None, dtype=pl.List(pl.Float64)).alias(
+            "predicted_probabilities"
+        ),
+        pl.lit("external").alias("classifier"),
+    )
+    if empty:
+        table = table.clear()
+    output = tmp_path / "usual"
+    additional = tmp_path / "additional"
+
+    plotter = EvaluationPlotter(table, output, plotting_config)
+    plotter.generate_all_plots({"all": ["cube", "mnist"]})
+    plotter.generate_per_dataset_plots(table, additional)
+
+    assert plotter.df_stop_action is None
+    assert plotter.df_traj is None
+    assert not output.exists()
+    assert not additional.exists()
+
+
+def test_performance_plot_preserves_method_order_and_null_numeric_values(
+    plotting_config: PlottingDisplayConfig,
+) -> None:
+    summary = pl.DataFrame(
+        {
+            "dataset": ["cube", "cube"],
+            "afa_method": ["jafa", "gdfs"],
+            "eval_hard_budget": [1, 2],
+            "mean_metric": [0.75, 0.6],
+            "low_metric": [None, None],
+            "high_metric": [None, None],
+        },
+        schema_overrides={"eval_hard_budget": pl.UInt64},
+    )
+
+    plot = get_normal_hard_budget_plot(
+        summary, plotting_config, method_order=["gdfs", "jafa"]
+    )
+
+    assert isinstance(plot.data, pl.DataFrame)
+    assert plot.data["afa_method"].to_list() == ["JAFA", "GDFS"]
+    assert plot.data["policy_type"].to_list() == ["Non-myopic", "Myopic"]
+    assert plot.scales.get_scales("color").breaks == ["GDFS", "JAFA"]
+    assert plot.scales.get_scales("fill").breaks == ["GDFS", "JAFA"]
+    assert len(plot.draw().axes) == 1

@@ -1,13 +1,13 @@
 """On-demand selection histories for a single evaluation artifact."""
 
-import pandas as pd
+import polars as pl
 
 from afabench.evaluation.schemas import validate_episode_log
 
 
-def reconstruct_selection_history(frame: pd.DataFrame) -> pd.Series:
+def reconstruct_selection_history(frame: pl.DataFrame) -> pl.Series:
     """
-    Return pre-action histories aligned to input row positions and index.
+    Return pre-action histories aligned to input row positions.
 
     Episode IDs are artifact-local: do not combine independently produced logs
     before calling this function. Stop and initial observations are excluded;
@@ -15,22 +15,18 @@ def reconstruct_selection_history(frame: pd.DataFrame) -> pd.Series:
     quadratic memory, so callers needing only lengths should use ``step``.
     """
     validate_episode_log(frame)
-    events = pd.DataFrame(
-        frame[["episode_id", "step", "action_performed"]]
-    ).copy()
-    events["position"] = range(len(events))
+    events = frame.select(
+        "episode_id", "step", "action_performed"
+    ).with_row_index("position")
     histories: list[list[int]] = [[] for _ in range(len(events))]
-    for _, episode in events.sort_values("step").groupby("episode_id"):
+    for episode in events.sort("step").partition_by("episode_id"):
         history: list[int] = []
-        for position, action in zip(
-            episode["position"], episode["action_performed"], strict=True
-        ):
+        for position, action in episode.select(
+            "position", "action_performed"
+        ).iter_rows():
             histories[position] = history.copy()
             if action > 0:
                 history.append(int(action) - 1)
-    return pd.Series(
-        histories,
-        index=frame.index,
-        name="prev_selections_performed",
-        dtype=object,
+    return pl.Series(
+        "prev_selections_performed", histories, dtype=pl.List(pl.Int64)
     )

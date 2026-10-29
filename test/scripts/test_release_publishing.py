@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+import polars as pl
 import pytest
 import yaml
 from click.testing import Result
@@ -226,8 +226,8 @@ def test_published_release_downloads_with_native_tables_and_plots(
             source_root / path
         ).read_bytes()
     for path in [RAW_TABLE, TRANSFORMED_TABLE]:
-        table = pd.read_parquet(destination_root / path)
-        assert table["afa_method"].unique().tolist() == ["alpha"]
+        table = pl.read_parquet(destination_root / path)
+        assert table["afa_method"].unique().to_list() == ["alpha"]
     manifest = read_release_manifest(
         destination_root / "release_manifest.json"
     )

@@ -3,9 +3,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import final, override
 
-import pandas as pd
+import polars as pl
 import torch
-from pandera.typing import DataFrame
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.sampler import SubsetRandomSampler
@@ -230,7 +229,7 @@ class _RowBuffers:
     builtin: list[torch.Tensor] = field(default_factory=list)
     external: list[torch.Tensor] = field(default_factory=list)
 
-    def to_frame(self, true_label: Label) -> DataFrame[BatchEvaluationSchema]:
+    def to_frame(self, true_label: Label) -> pl.DataFrame:
         idx = torch.cat(self.idx).cpu().tolist()
         action = torch.cat(self.action).cpu().tolist()
         n_rows = len(idx)
@@ -243,7 +242,7 @@ class _RowBuffers:
                 return [None] * n_rows
             return torch.cat(buffer).cpu().tolist()
 
-        frame = pd.DataFrame(
+        frame = pl.DataFrame(
             {
                 "episode_id": idx,
                 "step": [
@@ -261,7 +260,13 @@ class _RowBuffers:
                 "forced_stop": torch.cat(self.forced).cpu().tolist(),
             }
         )
-        return DataFrame[BatchEvaluationSchema](frame)
+        frame = frame.with_columns(
+            pl.col(
+                "builtin_predicted_probabilities",
+                "external_predicted_probabilities",
+            ).cast(pl.List(pl.Float64))
+        )
+        return BatchEvaluationSchema.validate(frame)
 
 
 def process_batch(
@@ -279,7 +284,7 @@ def process_batch(
     selection_costs: Sequence[float] | None = None,
     *,
     force_acquisition: bool = False,
-) -> DataFrame[BatchEvaluationSchema]:
+) -> pl.DataFrame:
     """
     Evaluate a single batch.
 
@@ -306,7 +311,7 @@ def process_batch(
         force_acquisition (bool): Whether to force feature acquisition, ignoring stop actions.
 
     Returns:
-        pd.DataFrame: DataFrame with one row per sample and timestep, containing columns:
+        pl.DataFrame: DataFrame with one row per sample and timestep, containing columns:
             - "episode_id" (int): Episode identifier local to this batch.
             - "step" (int): Zero-based time step within the episode.
             - "action_performed" (int): Which action the method chose.
@@ -453,7 +458,7 @@ def eval_afa_method(
     seed: int | None = None,
     *,
     force_acquisition: bool = False,
-) -> DataFrame[EvaluationSchema]:
+) -> pl.DataFrame:
     """
     Evaluate an AFA method with support for early stopping and batched processing.
 
@@ -474,7 +479,7 @@ def eval_afa_method(
         force_acquisition (bool): Whether to force feature acquisition, ignoring stop actions.
 
     Returns:
-        pd.DataFrame: DataFrame containing columns:
+        pl.DataFrame: DataFrame containing columns:
             - "episode_id" (int): Episode identifier unique within this result.
             - "generation_index" (int): The episode's instance's generation index.
             - "split_index" (int): The episode's instance's position in `dataset`.
@@ -512,7 +517,7 @@ def eval_afa_method(
             batch_size=batch_size,
         )
 
-    batches_df: list[DataFrame[EvaluationSchema]] = []
+    batches_df: list[pl.DataFrame] = []
     episode_offset = 0
     # Nothing here is differentiated, but several methods build a graph anyway.
     # DIME's `act` and `predict` in particular carry no internal guard, so
@@ -551,14 +556,16 @@ def eval_afa_method(
                 force_acquisition=force_acquisition,
             )
             # Batch-local episode IDs are positions in the batch
-            split_index = batch_split_index[batch_df["episode_id"].to_numpy()]
-            batch_df.insert(
-                1, "generation_index", generation_indices[split_index].numpy()
+            split_index = batch_split_index[
+                batch_df["episode_id"].to_numpy().copy()
+            ]
+            batch_df = batch_df.with_columns(
+                pl.Series(
+                    "generation_index", generation_indices[split_index].numpy()
+                ),
+                pl.Series("split_index", split_index.numpy()),
+                pl.col("episode_id") + episode_offset,
             )
-            batch_df.insert(2, "split_index", split_index.numpy())
-            batch_df["episode_id"] += episode_offset
             episode_offset += len(batch_features)
-            batches_df.append(DataFrame[EvaluationSchema](batch_df))
-    # Concatenate all batch DataFrames
-    df_batches = pd.concat(batches_df, ignore_index=True)
-    return DataFrame[EvaluationSchema](df_batches)
+            batches_df.append(EvaluationSchema.validate(batch_df))
+    return EvaluationSchema.validate(pl.concat(batches_df))

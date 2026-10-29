@@ -3,11 +3,11 @@ import zipfile
 from pathlib import Path
 from typing import ClassVar, final, override
 
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.datasets import tabular_csv
-from afabench.datasets.tabular_csv import TabularCSVDataset
+from afabench.datasets.tabular_csv import TabularCSVDataset, prepared_csv_bytes
 
 
 @final
@@ -68,21 +68,30 @@ class MiniBooNEDataset(TabularCSVDataset):
         with archive.open(cls.RAW_FILE) as raw:
             text = io.TextIOWrapper(raw)
             n_signal, n_background = map(int, text.readline().split())
-            frame = pd.read_csv(text, sep=r"\s+", header=None)
-        frame.columns = [f"Feature {i + 1}" for i in range(frame.shape[1])]
-        frame["Outcome"] = [1] * n_signal + [0] * n_background
-        return frame.to_csv(index=False).encode()
+            # The provider uses variable-width whitespace, not CSV delimiters.
+            content = "\n".join(
+                ",".join(line.split()) for line in text if line.strip()
+            )
+        frame = pl.read_csv(
+            io.StringIO(content), has_header=False, infer_schema_length=None
+        )
+        frame.columns = [f"Feature {i + 1}" for i in range(frame.width)]
+        frame = frame.with_columns(
+            pl.Series("Outcome", [1] * n_signal + [0] * n_background)
+        )
+        return prepared_csv_bytes(frame)
 
     @override
-    def _read_source(self) -> tuple[pd.DataFrame, pd.Series]:
-        return self.drop_invalid_rows(*super()._read_source())
+    def _read_source(self) -> pl.DataFrame:
+        return self.drop_invalid_rows(super()._read_source())
 
     @classmethod
-    def drop_invalid_rows(
-        cls, features_df: pd.DataFrame, labels: pd.Series
-    ) -> tuple[pd.DataFrame, pd.Series]:
-        """Drop the placeholder and outlier rows of MiniBooNE's source frames."""
-        keep = ~(features_df == cls.PLACEHOLDER).any(axis=1) & (
-            features_df.iloc[:, cls.OUTLIER_COLUMN].abs() < cls.OUTLIER_BOUND
+    def drop_invalid_rows(cls, frame: pl.DataFrame) -> pl.DataFrame:
+        """Drop the placeholder and outlier rows, retaining source rows."""
+        features = frame.columns[1:-1]
+        return frame.filter(
+            ~pl.any_horizontal(
+                (pl.col(features) == cls.PLACEHOLDER).fill_null(False)
+            )
+            & (pl.col(features[cls.OUTLIER_COLUMN]).abs() < cls.OUTLIER_BOUND)
         )
-        return features_df.loc[keep].copy(), labels.loc[keep]

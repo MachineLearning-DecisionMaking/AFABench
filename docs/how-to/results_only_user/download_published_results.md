@@ -31,9 +31,9 @@ https://huggingface.co/datasets/afabench/results/resolve/main/releases/<release_
 For example:
 
 ```python
-import pandas as pd
+import polars as pl
 
-df = pd.read_parquet(
+df = pl.read_parquet(
     "https://huggingface.co/datasets/afabench/results/resolve/main/releases/"
     "<release_id>/output/eval_results_transformed/<table path>/eval_data.parquet"
 )

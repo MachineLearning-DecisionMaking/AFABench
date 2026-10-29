@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 
 REQUIRED_COLS = [
     "method",
@@ -48,7 +48,7 @@ def main() -> None:
 
     dfs = []
     for path in input_paths:
-        df = pd.read_parquet(path)
+        df = pl.read_parquet(path)
 
         # Validate required columns
         missing = set(REQUIRED_COLS) - set(df.columns)
@@ -58,10 +58,10 @@ def main() -> None:
 
         dfs.append(df)
 
-    combined = pd.concat(dfs, ignore_index=True)
+    combined = pl.concat(dfs, how="diagonal_relaxed")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_parquet(output_path, index=False)
+    combined.write_parquet(output_path)
 
     print(f"Combined {len(input_paths)} files into {output_path}")
 

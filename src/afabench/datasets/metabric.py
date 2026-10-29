@@ -11,11 +11,11 @@ import zipfile
 from pathlib import Path
 from typing import ClassVar, final, override
 
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.datasets import tabular_csv
-from afabench.datasets.tabular_csv import TabularCSVDataset
+from afabench.datasets.tabular_csv import TabularCSVDataset, read_source_csv
 
 
 class MetabricSourceError(ValueError):
@@ -103,16 +103,20 @@ class MetabricDataset(TabularCSVDataset):
         return archive.read(cls.SOURCE_FILE)
 
     @override
-    def _read_source(self) -> tuple[pd.DataFrame, pd.Series]:
-        frame = pd.read_csv(self.source, low_memory=False)
+    def _read_source(self) -> pl.DataFrame:
+        frame = read_source_csv(self.source)
         columns = [*self.FEATURE_COLUMNS, self.LABEL_COLUMN]
-        missing = [column for column in columns if column not in frame]
+        missing = [column for column in columns if column not in frame.columns]
         if missing:
             msg = f"METABRIC source {self.source} has no columns {missing}"
             raise MetabricSourceError(msg)
-        frame = frame.loc[frame[self.LABEL_COLUMN] != self.NOT_CLASSIFIED]
-        # The base would fill missing values with column means
-        with_missing = [c for c in columns if bool(frame[c].isna().any())]
+        frame = frame.filter(
+            (pl.col(self.LABEL_COLUMN) != self.NOT_CLASSIFIED)
+            | pl.col(self.LABEL_COLUMN).is_null()
+        )
+        with_missing = [
+            c for c in columns if frame.get_column(c).null_count() > 0
+        ]
         if with_missing:
             msg = (
                 f"METABRIC source {self.source} has missing values in "
@@ -120,7 +124,9 @@ class MetabricDataset(TabularCSVDataset):
             )
             raise MetabricSourceError(msg)
         unknown = sorted(
-            set(frame[self.LABEL_COLUMN]) - set(self.CLASSES), key=str
+            set(frame.get_column(self.LABEL_COLUMN).to_list())
+            - set(self.CLASSES),
+            key=str,
         )
         if unknown:
             msg = (
@@ -128,7 +134,8 @@ class MetabricDataset(TabularCSVDataset):
                 f"expected {[*self.CLASSES, self.NOT_CLASSIFIED]}"
             )
             raise MetabricSourceError(msg)
-        labels = frame[self.LABEL_COLUMN].map(
-            {name: index for index, name in enumerate(self.CLASSES)}
+        return frame.select(tabular_csv.SOURCE_ROW, *columns).with_columns(
+            pl.col(self.LABEL_COLUMN).replace_strict(
+                {name: index for index, name in enumerate(self.CLASSES)}
+            )
         )
-        return frame.loc[:, list(self.FEATURE_COLUMNS)].copy(), labels

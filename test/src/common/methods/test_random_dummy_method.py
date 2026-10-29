@@ -72,7 +72,7 @@ def test_random_dummy_method_always_selects_0() -> None:
         f"Expected 2 rows in the result DataFrame, got {len(df_batch)}"
     )
     # All selections_performed should be 0 (no selections since we always stop immediately)
-    for _, row in df_batch.iterrows():
+    for row in df_batch.iter_rows(named=True):
         action_performed = row["action_performed"]
         assert action_performed == 0, (
             f"Expected action_performed == 0 (stop) when prob_select_0=1.0, but got {action_performed}"

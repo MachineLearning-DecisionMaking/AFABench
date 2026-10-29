@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 
 
 def main() -> None:
@@ -26,11 +26,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    df = pd.read_parquet(args.input_path)
-    df["dataset_split"] = args.dataset_split
+    df = pl.read_parquet(args.input_path).with_columns(
+        pl.lit(args.dataset_split, dtype=pl.Int64).alias("dataset_split")
+    )
 
     args.output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(args.output_path, index=False)
+    df.write_parquet(args.output_path)
 
 
 if __name__ == "__main__":

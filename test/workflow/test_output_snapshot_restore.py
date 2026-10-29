@@ -102,7 +102,7 @@ FAKE_EVALUATOR = """\
 import sys
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 
 from afabench.core.bundle_system.bundle import bundle_provenance
 from afabench.evaluation.provenance import save_evaluation_table
@@ -113,14 +113,14 @@ args = dict(arg.split("=", 1) for arg in sys.argv[1:])
 method = bundle_provenance(Path(args["method_bundle_path"])).method_name
 out = Path(args["save_path"])
 out.parent.mkdir(parents=True, exist_ok=True)
-frame = pd.DataFrame(
+frame = pl.DataFrame(
     {
         "episode_id": [0],
         "generation_index": [0],
         "split_index": [0],
         "step": [0],
         "action_performed": [0],
-        "builtin_predicted_probabilities": [None],
+        "builtin_predicted_probabilities": pl.Series([None], dtype=pl.List(pl.Float64)),
         "external_predicted_probabilities": [[0.25, 0.75]],
         "true_class": [1],
         "accumulated_cost": [0.0],
@@ -140,7 +140,7 @@ for name, value in {
     "eval_hard_budget": 1.0,
     "eval_soft_budget_param": None,
 }.items():
-    frame[name] = identity_column(name, value, frame.index)
+    frame = frame.with_columns(identity_column(name, value, len(frame)))
 save_evaluation_table(
     frame, out, provenance=record("evaluation", method_name=method)
 )

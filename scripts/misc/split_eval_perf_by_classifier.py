@@ -1,12 +1,14 @@
 import argparse
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
+
+from afabench.evaluation.provenance import save_evaluation_table
 
 
-def _write_parquet(df: pd.DataFrame, path: Path) -> None:
+def _write_parquet(df: pl.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, index=False)
+    save_evaluation_table(df, path, provenance=None)
 
 
 def main() -> None:
@@ -18,15 +20,13 @@ def main() -> None:
     parser.add_argument("--output_external", type=Path, required=True)
     args = parser.parse_args()
 
-    df = pd.read_parquet(args.input_path, dtype_backend="numpy_nullable")
+    df = pl.read_parquet(args.input_path)
     if "classifier" not in df.columns:
         msg = "Expected 'classifier' column in eval performance dataframe."
         raise ValueError(msg)
 
-    builtin = df.loc[df["classifier"] == "builtin"].drop(columns="classifier")
-    external = df.loc[df["classifier"] == "external"].drop(
-        columns="classifier"
-    )
+    builtin = df.filter(pl.col("classifier") == "builtin").drop("classifier")
+    external = df.filter(pl.col("classifier") == "external").drop("classifier")
 
     _write_parquet(builtin, args.output_builtin)
     _write_parquet(external, args.output_external)

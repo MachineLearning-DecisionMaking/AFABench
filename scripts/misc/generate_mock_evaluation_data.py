@@ -1,5 +1,5 @@
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 def generate_mock_data(  # noqa: C901, PLR0912, PLR0915
@@ -11,7 +11,7 @@ def generate_mock_data(  # noqa: C901, PLR0912, PLR0915
     n_classes: int = 4,
     n_splits: int = 3,
     random_state: int = 42,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     rng = np.random.default_rng(random_state)
     methods = [f"method_{i + 1}" for i in range(n_methods)]
     seeds = [100 + i for i in range(n_seeds)]
@@ -187,7 +187,7 @@ def generate_mock_data(  # noqa: C901, PLR0912, PLR0915
                                     "true_label": true_label,
                                 }
                             )
-    results_df = pd.DataFrame(results_rows)
+    results_df = pl.DataFrame(results_rows, infer_schema_length=None)
     return results_df
 
 
@@ -195,17 +195,15 @@ def main() -> None:
     """Generate mock evaluation results and save them as Parquet."""
     results_df = generate_mock_data()
 
-    results_df["training_seed"] = results_df["training_seed"].astype(int)
-    results_df["features_chosen"] = results_df["features_chosen"].astype(int)
-    results_df["predicted_label_external"] = results_df[
-        "predicted_label_external"
-    ].astype(int)
-    # Use pandas nullable Int64 for columns that can be NA/None
-    results_df["predicted_label_builtin"] = results_df[
-        "predicted_label_builtin"
-    ].astype("Int64")
-
-    results_df.to_parquet("eval_results.parquet", index=False)
+    results_df = results_df.with_columns(
+        pl.col(
+            "training_seed",
+            "features_chosen",
+            "predicted_label_external",
+            "predicted_label_builtin",
+        ).cast(pl.Int64)
+    )
+    results_df.write_parquet("eval_results.parquet")
     print("Mock results saved to eval_results.parquet")
 
 

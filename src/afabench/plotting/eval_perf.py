@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
-import numpy as np
-import pandas as pd
 import plotnine as p9
+import polars as pl
 from plotnine import (
     aes,
     element_text,
@@ -89,7 +88,7 @@ def get_dataset_name_mapping_including_metric(
 
 
 def get_plot(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     x_col: str,
     x_label: str,
     plotting_config: PlottingDisplayConfig,
@@ -121,28 +120,21 @@ def get_plot(
         get_dataset_name_mapping_including_metric(plotting_config)
     )
 
-    # plotnine cannot handle the pd.NA nulls of pandas' nullable numeric
-    # dtypes, so plot with NaN-backed floats instead
-    df = df.astype(
-        {
-            column: "float64"
-            for column, dtype in df.dtypes.items()
-            if pd.api.types.is_extension_array_dtype(dtype)
-            and pd.api.types.is_numeric_dtype(dtype)
-        }
-    )
-
-    # Apply name transforms
-    processed_df = df.assign(
-        dataset=df["dataset"].replace(dataset_name_mapping_including_metric),
-        policy_type=np.where(
-            df["afa_method"].isin(list(NON_MYOPIC_METHODS)),
-            "Non-myopic",
-            "Myopic",
-        ),
-        afa_method=df["afa_method"].replace(
-            plotting_config.method_name_mapping
-        ),
+    numeric_columns = [x_col, "mean_metric", "low_metric", "high_metric"]
+    if x_error_min and x_error_max:
+        numeric_columns.extend([x_error_min, x_error_max])
+    # Inferred all-null columns need a numeric type for plotnine's scales.
+    processed_df = df.with_columns(
+        pl.col(column).cast(pl.Float64)
+        for column in numeric_columns
+        if df.schema[column] == pl.Null
+    ).with_columns(
+        pl.col("dataset").replace(dataset_name_mapping_including_metric),
+        pl.when(pl.col("afa_method").is_in(NON_MYOPIC_METHODS))
+        .then(pl.lit("Non-myopic"))
+        .otherwise(pl.lit("Myopic"))
+        .alias("policy_type"),
+        pl.col("afa_method").replace(plotting_config.method_name_mapping),
     )
 
     # Get method order for legend
@@ -150,7 +142,7 @@ def get_plot(
         method_order = list(plotting_config.method_name_mapping.keys())
 
     # Get display names in order, filtering to only methods in the data
-    available_methods = processed_df["afa_method"].unique().tolist()
+    available_methods = processed_df["afa_method"].unique().to_list()
     ordered_display_names = [
         plotting_config.method_name_mapping.get(orig, orig)
         for orig in method_order
@@ -193,7 +185,7 @@ def get_plot(
             y="Metric",
             title=(
                 plotting_config.dataset_name_mapping.get(
-                    str(df.iloc[0]["dataset"]), str(df.iloc[0]["dataset"])
+                    str(df["dataset"][0]), str(df["dataset"][0])
                 )
                 if per_dataset
                 else None
@@ -249,7 +241,7 @@ def get_plot(
 
 
 def get_per_dataset_plot(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     x_col: str,
     x_label: str,
     plotting_config: PlottingDisplayConfig,
@@ -261,31 +253,26 @@ def get_per_dataset_plot(
     """Facet one dataset's classifier-separated seed summaries by metric."""
     metric_frames = []
     for metric, column in METRIC_COLUMNS.items():
-        frame = df.assign(
-            metric="Macro F1" if metric == "f1" else METRIC_LABELS[metric],
-            mean_metric=df[f"mean_{column}"],
-            std_metric=df[f"std_{column}"],
+        frame = df.with_columns(
+            pl.lit(
+                "Macro F1" if metric == "f1" else METRIC_LABELS[metric]
+            ).alias("metric"),
+            pl.col(f"mean_{column}").alias("mean_metric"),
+            pl.col(f"std_{column}").alias("std_metric"),
         )
         metric_frames.append(frame)
-    long = pd.concat(metric_frames, ignore_index=True)
-    long = long.assign(
-        low_metric=long["mean_metric"] - long["std_metric"],
-        high_metric=long["mean_metric"] + long["std_metric"],
-        classifier=pd.Categorical(
-            long["classifier"].replace(
-                {
-                    "external": "External classifier",
-                    "builtin": "Built-in classifier",
-                }
-            ),
-            categories=["External classifier", "Built-in classifier"],
-            ordered=True,
-        ),
-        metric=pd.Categorical(
-            long["metric"],
-            categories=["Accuracy", "Macro F1", "AUROC"],
-            ordered=True,
-        ),
+    long = pl.concat(metric_frames).with_columns(
+        (pl.col("mean_metric") - pl.col("std_metric")).alias("low_metric"),
+        (pl.col("mean_metric") + pl.col("std_metric")).alias("high_metric"),
+        pl.col("classifier")
+        .replace(
+            {
+                "external": "External classifier",
+                "builtin": "Built-in classifier",
+            }
+        )
+        .cast(pl.Enum(["External classifier", "Built-in classifier"])),
+        pl.col("metric").cast(pl.Enum(["Accuracy", "Macro F1", "AUROC"])),
     )
     return get_plot(
         long,
@@ -297,12 +284,12 @@ def get_per_dataset_plot(
         use_line=use_line,
         per_dataset=True,
         figure_width=plotting_config.plot_width,
-        figure_height=SUBPLOT_HEIGHT * df["classifier"].nunique(),
+        figure_height=SUBPLOT_HEIGHT * df["classifier"].n_unique(),
     )
 
 
 def get_normal_hard_budget_plot(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     plotting_config: PlottingDisplayConfig,
     method_order: list[str] | None = None,
     figure_width: float | None = None,
@@ -321,7 +308,7 @@ def get_normal_hard_budget_plot(
 
 
 def get_traj_hard_budget_plot(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     plotting_config: PlottingDisplayConfig,
     method_order: list[str] | None = None,
     figure_width: float | None = None,
@@ -340,7 +327,7 @@ def get_traj_hard_budget_plot(
 
 
 def get_soft_budget_plot(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     mode: str,
     plotting_config: PlottingDisplayConfig,
     method_order: list[str] | None = None,
@@ -401,33 +388,33 @@ def calculate_figure_dimensions(
 
 
 def add_metric_column(
-    df: pd.DataFrame, plotting_config: PlottingDisplayConfig
-) -> pd.DataFrame:
-    metrics = (
-        df["dataset"]
-        .map(plotting_config.dataset_metrics.get)
-        .fillna(plotting_config.default_metric)
+    df: pl.DataFrame, plotting_config: PlottingDisplayConfig
+) -> pl.DataFrame:
+    metrics = pl.col("dataset").replace_strict(
+        plotting_config.dataset_metrics,
+        default=plotting_config.default_metric,
     )
-    result = df.copy()
-    for metric, column in METRIC_COLUMNS.items():
-        selected = metrics == metric
-        result.loc[selected, "mean_metric"] = df.loc[
-            selected, f"mean_{column}"
-        ]
-        result.loc[selected, "std_metric"] = df.loc[selected, f"std_{column}"]
-    return result
+    return df.with_columns(
+        pl.coalesce(
+            [
+                pl.when(metrics == metric).then(pl.col(f"{stat}_{column}"))
+                for metric, column in METRIC_COLUMNS.items()
+            ]
+        ).alias(f"{stat}_metric")
+        for stat in ("mean", "std")
+    )
 
 
 def process_df_only_stop_action_and_valid_prediction(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     plotting_config: PlottingDisplayConfig,
-) -> pd.DataFrame | None:
-    df_only_stop_action = df.loc[
-        (df["action_performed"] == 0).fillna(False)
-        & df["predicted_probabilities"].notna()
-    ]
+) -> pl.DataFrame | None:
+    df_only_stop_action = df.filter(
+        (pl.col("action_performed") == 0)
+        & pl.col("predicted_probabilities").is_not_null()
+    )
 
-    if df_only_stop_action.empty:
+    if df_only_stop_action.is_empty():
         return None
 
     metric_df_only_stop_action = metrics_at_stop(df_only_stop_action)
@@ -443,27 +430,33 @@ def process_df_only_stop_action_and_valid_prediction(
     )
 
     # Add "low" and "high" versions of metrics to enable plotting of ranges
-    var_metric_df_only_stop_action = var_metric_df_only_stop_action.assign(
-        low_metric=lambda d: d["mean_metric"] - d["std_metric"],
-        high_metric=lambda d: d["mean_metric"] + d["std_metric"],
-        low_avg_accumulated_cost=lambda d: (
-            d["mean_avg_accumulated_cost"] - d["std_avg_accumulated_cost"]
-        ),
-        high_avg_accumulated_cost=lambda d: (
-            d["mean_avg_accumulated_cost"] + d["std_avg_accumulated_cost"]
-        ),
+    var_metric_df_only_stop_action = (
+        var_metric_df_only_stop_action.with_columns(
+            (pl.col("mean_metric") - pl.col("std_metric")).alias("low_metric"),
+            (pl.col("mean_metric") + pl.col("std_metric")).alias(
+                "high_metric"
+            ),
+            (
+                pl.col("mean_avg_accumulated_cost")
+                - pl.col("std_avg_accumulated_cost")
+            ).alias("low_avg_accumulated_cost"),
+            (
+                pl.col("mean_avg_accumulated_cost")
+                + pl.col("std_avg_accumulated_cost")
+            ).alias("high_avg_accumulated_cost"),
+        )
     )
 
     return var_metric_df_only_stop_action
 
 
 def process_df_every_action(
-    df: pd.DataFrame, plotting_config: PlottingDisplayConfig
-) -> pd.DataFrame | None:
+    df: pl.DataFrame, plotting_config: PlottingDisplayConfig
+) -> pl.DataFrame | None:
     # Just like in process_df_only_stop_action, filter out null predictions
-    df = df.loc[df["predicted_probabilities"].notna()]
+    df = df.filter(pl.col("predicted_probabilities").is_not_null())
 
-    if df.empty:
+    if df.is_empty():
         return None
 
     # When considering performance up to some budget, we only look at the case when the largest budget is used
@@ -482,9 +475,9 @@ def process_df_every_action(
     )
 
     # Add "low" and "high" versions of metrics to enable plotting of ranges
-    var_metric_df_every_action = var_metric_df_every_action.assign(
-        low_metric=lambda d: d["mean_metric"] - d["std_metric"],
-        high_metric=lambda d: d["mean_metric"] + d["std_metric"],
+    var_metric_df_every_action = var_metric_df_every_action.with_columns(
+        (pl.col("mean_metric") - pl.col("std_metric")).alias("low_metric"),
+        (pl.col("mean_metric") + pl.col("std_metric")).alias("high_metric"),
     )
 
     return var_metric_df_every_action
@@ -496,12 +489,12 @@ class EvaluationPlotter:
 
     output_folder: Path
     plotting_config: PlottingDisplayConfig
-    df_stop_action: pd.DataFrame | None
-    df_traj: pd.DataFrame | None
+    df_stop_action: pl.DataFrame | None
+    df_traj: pl.DataFrame | None
 
     def __init__(
         self,
-        table: pd.DataFrame,
+        table: pl.DataFrame,
         output_folder: Path,
         plotting_config: PlottingDisplayConfig,
         formats: Sequence[str] = ("pdf",),
@@ -532,21 +525,19 @@ class EvaluationPlotter:
         if self.df_stop_action is None:
             return
 
-        df_stop_action_filtered = self.df_stop_action.loc[
-            self.df_stop_action["dataset"].isin(list(dataset_set))
-        ]
+        df_stop_action_filtered = self.df_stop_action.filter(
+            pl.col("dataset").is_in(dataset_set)
+        )
 
-        df_stop_action_hard_budget = df_stop_action_filtered.loc[
-            df_stop_action_filtered["eval_hard_budget"].notna()
-        ]
+        df_stop_action_hard_budget = df_stop_action_filtered.filter(
+            pl.col("eval_hard_budget").is_not_null()
+        )
         df_stop_action_hard_budget = apply_exclusions(
             df_stop_action_hard_budget
         )
-        if not df_stop_action_hard_budget.empty:
+        if not df_stop_action_hard_budget.is_empty():
             # Calculate figure dimensions based on number of unique datasets
-            num_datasets = df_stop_action_hard_budget.loc[
-                :, "dataset"
-            ].nunique()
+            num_datasets = df_stop_action_hard_budget["dataset"].n_unique()
             fig_width, fig_height = calculate_figure_dimensions(
                 num_datasets,
                 plot_width=self.plotting_config.plot_width,
@@ -565,17 +556,15 @@ class EvaluationPlotter:
                     fig_width,
                     fig_height,
                 )
-        df_stop_action_soft_budget = df_stop_action_filtered.loc[
-            df_stop_action_filtered["soft_budget_param"].notna()
-        ]
+        df_stop_action_soft_budget = df_stop_action_filtered.filter(
+            pl.col("soft_budget_param").is_not_null()
+        )
         df_stop_action_soft_budget = apply_exclusions(
             df_stop_action_soft_budget
         )
-        if not df_stop_action_soft_budget.empty:
+        if not df_stop_action_soft_budget.is_empty():
             # Calculate figure dimensions based on number of unique datasets
-            num_datasets = df_stop_action_soft_budget.loc[
-                :, "dataset"
-            ].nunique()
+            num_datasets = df_stop_action_soft_budget["dataset"].n_unique()
             fig_width, fig_height = calculate_figure_dimensions(
                 num_datasets,
                 plot_width=self.plotting_config.plot_width,
@@ -618,16 +607,16 @@ class EvaluationPlotter:
         if self.df_traj is None:
             return
 
-        df_traj_filtered = self.df_traj.loc[
-            self.df_traj["dataset"].isin(list(dataset_set))
-        ]
-        df_traj_hard_budget = df_traj_filtered.loc[
-            df_traj_filtered["eval_hard_budget"].notna()
-        ]
+        df_traj_filtered = self.df_traj.filter(
+            pl.col("dataset").is_in(dataset_set)
+        )
+        df_traj_hard_budget = df_traj_filtered.filter(
+            pl.col("eval_hard_budget").is_not_null()
+        )
         df_traj_hard_budget = apply_exclusions(df_traj_hard_budget)
-        if not df_traj_hard_budget.empty:
+        if not df_traj_hard_budget.is_empty():
             # Calculate figure dimensions based on number of unique datasets
-            num_datasets = df_traj_hard_budget.loc[:, "dataset"].nunique()
+            num_datasets = df_traj_hard_budget["dataset"].n_unique()
             fig_width, fig_height = calculate_figure_dimensions(
                 num_datasets,
                 plot_width=self.plotting_config.plot_width,
@@ -648,7 +637,7 @@ class EvaluationPlotter:
                 )
 
     def generate_per_dataset_plots(
-        self, table: pd.DataFrame, output_folder: Path
+        self, table: pl.DataFrame, output_folder: Path
     ) -> None:
         """
         Save additional figures from an unsplit, single-method-set table.
@@ -668,10 +657,10 @@ class EvaluationPlotter:
             )
             raise ValueError(msg)
         table = combine_soft_budget_params(table)
-        stop_frames: list[pd.DataFrame] = []
-        trajectory_frames: list[pd.DataFrame] = []
+        stop_frames: list[pl.DataFrame] = []
+        trajectory_frames: list[pl.DataFrame] = []
         for classifier in ("external", "builtin"):
-            selected = table.loc[table["classifier"] == classifier]
+            selected = table.filter(pl.col("classifier") == classifier)
             stop = process_df_only_stop_action_and_valid_prediction(
                 selected, self.plotting_config
             )
@@ -679,10 +668,14 @@ class EvaluationPlotter:
                 selected, self.plotting_config
             )
             if stop is not None:
-                stop_frames.append(stop.assign(classifier=classifier))
+                stop_frames.append(
+                    stop.with_columns(pl.lit(classifier).alias("classifier"))
+                )
             if trajectory is not None:
                 trajectory_frames.append(
-                    trajectory.assign(classifier=classifier)
+                    trajectory.with_columns(
+                        pl.lit(classifier).alias("classifier")
+                    )
                 )
 
         for frames, trajectory in (
@@ -692,24 +685,26 @@ class EvaluationPlotter:
             if not frames:
                 continue
             self._save_per_dataset_variants(
-                pd.concat(frames, ignore_index=True),
+                pl.concat(frames),
                 output_folder,
                 trajectory=trajectory,
             )
 
     def _save_per_dataset_variants(
         self,
-        summaries: pd.DataFrame,
+        summaries: pl.DataFrame,
         output_folder: Path,
         *,
         trajectory: bool,
     ) -> None:
-        for dataset, dataset_frame in summaries.groupby("dataset"):
+        for (dataset,), dataset_frame in summaries.group_by(
+            "dataset", maintain_order=True
+        ):
             hard = apply_exclusions(
-                dataset_frame.loc[dataset_frame["eval_hard_budget"].notna()]
+                dataset_frame.filter(pl.col("eval_hard_budget").is_not_null())
             )
             soft = apply_exclusions(
-                dataset_frame.loc[dataset_frame["soft_budget_param"].notna()]
+                dataset_frame.filter(pl.col("soft_budget_param").is_not_null())
             )
             variants = [
                 (
@@ -742,7 +737,7 @@ class EvaluationPlotter:
                     ]
                 )
             for name, frame, x_col, x_label, use_line in variants:
-                if frame.empty:
+                if frame.is_empty():
                     continue
                 plot = get_per_dataset_plot(
                     frame,
@@ -757,7 +752,7 @@ class EvaluationPlotter:
                         "high_avg_accumulated_cost" if not use_line else None
                     ),
                 )
-                height = SUBPLOT_HEIGHT * frame["classifier"].nunique()
+                height = SUBPLOT_HEIGHT * frame["classifier"].n_unique()
                 for fmt in self.formats:
                     self.save_plot(
                         plot,

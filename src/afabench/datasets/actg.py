@@ -1,6 +1,6 @@
 from typing import ClassVar, final, override
 
-import pandas as pd
+import polars as pl
 from ucimlrepo import fetch_ucirepo
 
 from afabench.datasets.uci import UCIDataset
@@ -18,13 +18,10 @@ class ACTG175Dataset(UCIDataset):
 
     @classmethod
     @override
-    def _fetch_uci(cls) -> pd.DataFrame:
+    def _fetch_uci(cls) -> pl.DataFrame:
         actg_data = fetch_ucirepo(id=890)
         assert actg_data is not None
         assert actg_data.data is not None
-        features_df = actg_data.data.features.copy()
-        target_df = actg_data.data.targets.copy()
-        target_series = target_df.iloc[:, 0].astype(int)
-        df_data = features_df.copy()
-        df_data["target"] = target_series.to_numpy()
-        return df_data
+        features = pl.from_pandas(actg_data.data.features)
+        target = pl.from_pandas(actg_data.data.targets).to_series(0)
+        return features.with_columns(target.cast(pl.Int64).alias("target"))

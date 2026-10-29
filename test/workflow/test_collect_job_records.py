@@ -4,8 +4,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from afabench.core.job_duration_table import load_job_duration_table
 from test.workflow.submission_harness import REPO_ROOT
@@ -40,7 +41,7 @@ TABLE = "merged_results/job_duration_table.parquet"
 @dataclass
 class CollectedRun:
     output: Path
-    table: pd.DataFrame
+    table: pl.DataFrame
 
 
 @pytest.fixture(scope="module")
@@ -73,18 +74,16 @@ def test_the_table_holds_one_row_per_job_that_ran_including_failed_attempts(
     collected_run: CollectedRun,
 ) -> None:
     table = collected_run.table
-    completed = table[table["exit_status"] == "completed"]
+    completed = table.filter(pl.col("exit_status") == "completed")
     assert sorted(completed["job_record_path"]) == sorted(COMPLETED_RECORDS)
-    failed_attempts = table[table["exit_status"] == "failed"]
+    failed_attempts = table.filter(pl.col("exit_status") == "failed")
     assert list(failed_attempts["name"]) == ["beta"]
     [failed_path] = list(failed_attempts["job_record_path"])
     assert failed_path.startswith(
         f"failed_job_records/trained_methods/{TAG}/{BETA}/method."
     )
     assert len(table) == len(COMPLETED_RECORDS) + 1
-    pd.testing.assert_frame_equal(
-        table, load_job_duration_table(collected_run.output)
-    )
+    assert_frame_equal(table, load_job_duration_table(collected_run.output))
 
 
 def test_the_time_plot_renders_from_the_table(

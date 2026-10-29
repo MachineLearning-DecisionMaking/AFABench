@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 import torch
 
@@ -32,30 +32,40 @@ PAPER_GENES = [
 ]
 SUBTYPE = "pam50_+_claudin-low_subtype"
 # Row 2 is not classified, so instances 0..6 are rows 0, 1, 3..7
-SUBTYPES = ["Normal", "LumA", "NC", "claudin-low", "Basal", "Her2", "LumB"]
-SUBTYPES += ["LumA"]
+SUBTYPES = [
+    "Normal",
+    "LumA",
+    "NC",
+    "claudin-low",
+    "Basal",
+    "Her2",
+    "LumB",
+    "LumA",
+]
 
 
-def source_frame() -> pd.DataFrame:
+def source_frame() -> pl.DataFrame:
     """Return a small source in the Kaggle file's layout, its genes in reverse order."""
     rng = np.random.default_rng(0)
     n_rows = len(SUBTYPES)
-    frame = pd.DataFrame({"patient_id": range(n_rows)})
-    frame["age_at_diagnosis"] = rng.uniform(30, 90, n_rows)
-    frame[SUBTYPE] = SUBTYPES
+    frame = pl.DataFrame({"patient_id": range(n_rows)})
+    frame = frame.with_columns(
+        pl.Series("age_at_diagnosis", rng.uniform(30, 90, n_rows))
+    )
+    frame = frame.with_columns(pl.Series(SUBTYPE, SUBTYPES))
     for gene in [*reversed(PAPER_GENES), "abcb1"]:
-        frame[gene] = rng.normal(size=n_rows)
-    frame["tp53_mut"] = "0"
+        frame = frame.with_columns(pl.Series(gene, rng.normal(size=n_rows)))
+    frame = frame.with_columns(pl.lit("0").alias("tp53_mut"))
     return frame
 
 
-def write_source(path: Path, frame: pd.DataFrame) -> str:
+def write_source(path: Path, frame: pl.DataFrame) -> str:
     """Write `frame` as the source; return its SHA-256."""
-    frame.to_csv(path, index=False)
+    frame.write_csv(path)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def metabric(tmp_path: Path, frame: pd.DataFrame) -> MetabricDataset:
+def metabric(tmp_path: Path, frame: pl.DataFrame) -> MetabricDataset:
     path = tmp_path / "METABRIC_RNA_Mutation.csv"
     return MetabricDataset(root=str(path), sha256=write_source(path, frame))
 
@@ -68,7 +78,7 @@ def test_features_are_the_paper_genes_in_the_paper_order(
     dataset = metabric(tmp_path, frame)
 
     assert dataset.feature_names == PAPER_GENES
-    kept = frame[frame[SUBTYPE] != "NC"]
+    kept = frame.filter(pl.col(SUBTYPE) != "NC")
     # Normalization keeps each gene's ordering across instances
     for column, gene in enumerate(PAPER_GENES):
         assert dataset.features[:, column].argsort().tolist() == (
@@ -133,7 +143,7 @@ def test_source_with_another_checksum_is_rejected(tmp_path: Path) -> None:
 def test_source_without_a_needed_column_is_rejected(
     tmp_path: Path, column: str
 ) -> None:
-    frame = source_frame().drop(columns=[column])
+    frame = source_frame().drop(column)
 
     with pytest.raises(
         MetabricSourceError, match=rf"no columns \['{re.escape(column)}'"
@@ -146,7 +156,7 @@ def test_missing_value_in_a_kept_tumour_is_rejected(
     tmp_path: Path, column: str
 ) -> None:
     frame = source_frame()
-    frame.loc[4, column] = None
+    frame[4, column] = None
 
     with pytest.raises(
         MetabricSourceError, match=rf"missing values.*{re.escape(column)}"
@@ -156,7 +166,7 @@ def test_missing_value_in_a_kept_tumour_is_rejected(
 
 def test_unknown_subtype_is_rejected(tmp_path: Path) -> None:
     frame = source_frame()
-    frame.loc[5, SUBTYPE] = "Her2-enriched"
+    frame[5, SUBTYPE] = "Her2-enriched"
 
     with pytest.raises(MetabricSourceError, match=r"\['Her2-enriched'\]"):
         metabric(tmp_path, frame)
@@ -183,7 +193,7 @@ def serve_archive(
 def test_source_is_prepared_from_the_kaggle_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    content = source_frame().to_csv(index=False).encode()
+    content = source_frame().write_csv().encode()
     requested = serve_archive(
         monkeypatch, {"METABRIC_RNA_Mutation.csv": content}
     )

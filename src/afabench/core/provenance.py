@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, Self, cast
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 import torch.version
 
@@ -72,7 +72,7 @@ class Environment:
     afabench_version: str | None
     torch_version: str
     numpy_version: str
-    pandas_version: str
+    polars_version: str
     lockfile_sha256: str | None
     platform: str
 
@@ -279,7 +279,7 @@ def _environment(checkout: Path | None) -> Environment:
         afabench_version=afabench_version,
         torch_version=torch.__version__,
         numpy_version=np.__version__,
-        pandas_version=pd.__version__,
+        polars_version=pl.__version__,
         lockfile_sha256=(
             hashlib.sha256(lockfile.read_bytes()).hexdigest()
             if lockfile is not None and lockfile.is_file()

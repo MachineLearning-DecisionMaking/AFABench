@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 
 from afabench.datasets import MiniBooNEDataset, MiniBooNESubsetDataset
@@ -27,17 +27,21 @@ def test_subset_is_miniboone_restricted_to_the_paper_features(
     tmp_path: Path,
 ) -> None:
     rng = np.random.default_rng(0)
-    source = pd.DataFrame(
+    source = pl.DataFrame(
         rng.normal(size=(12, 50)),
-        columns=[f"Feature {i}" for i in range(1, 51)],
+        schema=[f"Feature {i}" for i in range(1, 51)],
     )
     # A placeholder row, and an outlier in Feature 20, which the subset
     # does not keep
-    source.iloc[3] = -999.0
-    source.loc[7, "Feature 20"] = -17256.7
-    source["Outcome"] = [i % 2 for i in range(12)]
+    source = source.with_columns(
+        pl.when(pl.int_range(pl.len()) != 3).then(pl.all()).otherwise(-999.0)
+    )
+    source[7, "Feature 20"] = -17256.7
+    source = source.with_columns(
+        pl.Series("Outcome", [i % 2 for i in range(12)])
+    )
     path = tmp_path / "miniboone.csv"
-    source.to_csv(path, index=False)
+    source.write_csv(path)
 
     sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
     subset = MiniBooNESubsetDataset(root=str(path), sha256=sha256)

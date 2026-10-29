@@ -66,9 +66,9 @@ def test_sampled_evaluation_records_the_evaluated_instances(
 
     # Every episode stops at once, so episode e saw row e of `seen`
     evaluated = torch.cat(seen)
-    episodes = result.set_index("episode_id").sort_index()
-    split_index = torch.tensor(episodes["split_index"].tolist())
-    generation_index = torch.tensor(episodes["generation_index"].tolist())
+    episodes = result.sort("episode_id")
+    split_index = torch.tensor(episodes["split_index"].to_list())
+    generation_index = torch.tensor(episodes["generation_index"].to_list())
     assert len(split_index.unique()) == 7
     torch.testing.assert_close(dataset.features[split_index], evaluated)
     torch.testing.assert_close(source.features[generation_index], evaluated)

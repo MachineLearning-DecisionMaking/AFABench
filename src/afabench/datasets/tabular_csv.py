@@ -2,31 +2,77 @@ import hashlib
 from abc import ABC
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import ClassVar, Self, cast, override
+from typing import ClassVar, Self, override
 from urllib.request import urlopen
 
-import pandas as pd
+import polars as pl
 import torch
-from sklearn.preprocessing import LabelEncoder
 from torch import Tensor
 
 from afabench.core.types import Features, Label
 from afabench.datasets.in_memory import InMemoryAFADataset
 from afabench.datasets.utils import one_hot
 
+# Keep the CSV missing-value vocabulary of the pinned prepared sources.
+CSV_NULL_VALUES = [
+    "",
+    "#N/A",
+    "#N/A N/A",
+    "#NA",
+    "-1.#IND",
+    "-1.#QNAN",
+    "-NaN",
+    "-nan",
+    "1.#IND",
+    "1.#QNAN",
+    "<NA>",
+    "N/A",
+    "NA",
+    "NULL",
+    "NaN",
+    "None",
+    "n/a",
+    "nan",
+    "null",
+]
+SOURCE_ROW = "__source_row"
 
-def _z_normalize(
-    features_df: pd.DataFrame | pd.Series,
-) -> pd.DataFrame | pd.Series:
-    """
-    Apply feature-wise Z-normalization using population statistics.
 
-    Zero standard deviations are replaced with 1.0 to avoid division by zero.
-    """
-    means: pd.Series = cast("pd.Series", features_df.mean())
-    stds: pd.Series = cast("pd.Series", features_df.std(ddof=0))
-    stds = stds.replace(0, 1.0)
-    return (features_df - means) / stds
+def read_source_csv(source: Path, *, separator: str = ",") -> pl.DataFrame:
+    return pl.read_csv(
+        source,
+        separator=separator,
+        infer_schema_length=None,
+        null_values=CSV_NULL_VALUES,
+        row_index_name=SOURCE_ROW,
+    )
+
+
+def prepared_csv_bytes(frame: pl.DataFrame, *, separator: str = ",") -> bytes:
+    """Serialize ADR 0014's pinned CSV bytes at the pandas boundary only."""
+    import pandas as pd  # noqa: PLC0415
+
+    return (
+        pd.DataFrame(frame.to_dict(as_series=False))
+        .to_csv(sep=separator, index=False)
+        .encode()
+    )
+
+
+def encode_categories(column: pl.Expr) -> pl.Expr:
+    # Dense ranks use lexical order, matching the source's label encoding.
+    return (column.rank(method="dense") - 1).cast(pl.Float64)
+
+
+def _z_normalize(features: pl.DataFrame) -> pl.DataFrame:
+    """Z-normalize with population statistics, keeping constant columns zero."""
+    return features.select(
+        (pl.col(name) - pl.col(name).mean())
+        / pl.when(pl.col(name).std(ddof=0) == 0)
+        .then(1.0)
+        .otherwise(pl.col(name).std(ddof=0))
+        for name in features.columns
+    )
 
 
 class SourceChecksumError(ValueError):
@@ -142,46 +188,44 @@ class TabularCSVDataset(InMemoryAFADataset, ABC):
             else "; remove it to prepare it again",
         )
 
-    def _read_source(self) -> tuple[pd.DataFrame, pd.Series]:
+    def _read_source(self) -> pl.DataFrame:
         """
-        Return the feature columns and the integer class label of each row of `source`.
+        Return source row, features and label (last), preserving source order.
 
-        A subclass may drop rows but must keep their order and the frames'
-        index, which is the source row of each instance.
+        Subclasses may filter rows but must retain the explicit SOURCE_ROW
+        column, which is assigned before any filtering.
         """
-        frame = pd.read_csv(self.source)
-        return frame.iloc[:, :-1].copy(), frame.iloc[:, -1]
+        return read_source_csv(self.source)
 
     @override
     def _build(self) -> tuple[Features, Label]:
         self._check_source()
-        features_df, labels = self._read_source()
-
-        for col in features_df.columns:
-            if features_df[col].dtype == "object":
-                mask = features_df[col].notna()
-                if bool(mask.any()):
-                    features_df.loc[mask, col] = LabelEncoder().fit_transform(
-                        features_df.loc[mask, col].astype(str)
-                    )
-        for col in features_df.columns:
-            features_df[col] = pd.to_numeric(features_df[col], errors="coerce")
-        features_df = features_df.fillna(features_df.mean())
+        frame = self._read_source()
+        labels = frame.get_column(frame.columns[-1])
+        features_df = frame.select(frame.columns[1:-1])
+        features_df = features_df.with_columns(
+            encode_categories(pl.col(name))
+            for name, dtype in features_df.schema.items()
+            if dtype == pl.String
+        ).select(pl.all().cast(pl.Float64, strict=False).fill_nan(None))
+        features_df = features_df.select(pl.all().fill_null(pl.all().mean()))
         features_df = _z_normalize(features_df)
 
-        features = torch.tensor(features_df.values, dtype=torch.float32)
+        features = torch.tensor(features_df.to_numpy(), dtype=torch.float32)
         if torch.isnan(features).any():
             msg = (
                 f"{type(self).__name__} has NaN features after filling "
                 f"missing values from {self.source}; a column has no values"
             )
             raise ValueError(msg)
-        self.feature_names = features_df.columns.tolist()
+        self.feature_names = features_df.columns
         self.source_rows = torch.tensor(
-            features_df.index.to_numpy(), dtype=torch.long
+            frame.get_column(SOURCE_ROW).cast(pl.Int64).to_numpy(),
+            dtype=torch.long,
         )
         return features, one_hot(
-            torch.tensor(labels.values, dtype=torch.long), self.label_shape[0]
+            torch.tensor(labels.to_numpy(), dtype=torch.long),
+            self.label_shape[0],
         )
 
     def get_source_rows(self) -> Tensor:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 import torch
 from PIL import Image
@@ -37,7 +37,7 @@ SPLITS = ("train", "val", "test")
 SPLIT_RATIO = SplitRatioConfig(train=0.6, val=0.2, test=0.2)
 
 # (number of features, labels per row) of each real-world tabular source
-TABULAR_SOURCES: dict[str, tuple[int, list[object]]] = {
+TABULAR_SOURCES: dict[str, tuple[int, list[int] | list[str]]] = {
     "DiabetesDataset": (45, [i % 3 for i in range(N_ROWS)]),
     "MiniBooNEDataset": (50, [i % 2 for i in range(N_ROWS)]),
     "MiniBooNESubsetDataset": (50, [i % 2 for i in range(N_ROWS)]),
@@ -56,23 +56,29 @@ def write_tabular_source(class_name: str, path: Path) -> dict[str, Any]:
     """Write a CSV source whose first feature is the row number; return the kwargs that read it."""
     n_features, labels = TABULAR_SOURCES[class_name]
     rng = np.random.default_rng(0)
-    frame = pd.DataFrame(
+    frame = pl.DataFrame(
         rng.normal(size=(N_ROWS, n_features)),
-        columns=[f"f{i}" for i in range(n_features)],
+        schema=[f"f{i}" for i in range(n_features)],
     )
-    frame["f0"] = np.arange(N_ROWS, dtype=float)
+    frame = frame.with_columns(pl.Series("f0", np.arange(N_ROWS, dtype=float)))
     separator = ","
     if class_name == "MetabricDataset":
         frame.columns = list(MetabricDataset.FEATURE_COLUMNS)
-        frame[MetabricDataset.LABEL_COLUMN] = [
-            MetabricDataset.CLASSES[label] for label in labels
-        ]
+        frame = frame.with_columns(
+            pl.Series(
+                MetabricDataset.LABEL_COLUMN,
+                [
+                    MetabricDataset.CLASSES[cast("int", label)]
+                    for label in labels
+                ],
+            )
+        )
     elif class_name == "BankMarketingDataset":
-        frame["y"] = labels
+        frame = frame.with_columns(pl.Series("y", labels))
         separator = ";"
     else:
-        frame["target"] = labels
-    frame.to_csv(path, sep=separator, index=False)
+        frame = frame.with_columns(pl.Series("target", labels))
+    frame.write_csv(path, separator=separator)
     sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
     dataset_class = cast("type[TabularCSVDataset]", get_class(class_name))
     return {dataset_class.source_config_key: str(path), "sha256": sha256}

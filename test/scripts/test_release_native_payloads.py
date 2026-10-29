@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
@@ -193,20 +193,17 @@ def test_raw_tables_round_trip_values_nulls_schema_and_histories(
     write_catalog(source_root, Catalog(methods=[ALPHA], smoke_test=True))
     raw_path = source_root / ALPHA_RAW_TABLE
     record = pq.read_schema(raw_path).metadata[PROVENANCE_METADATA_KEY]
-    table = pa.Table.from_pandas(
-        raw_table(
-            Evaluation(
-                method="alpha",
-                dataset="cube",
-                realization=0,
-                train_hard_budget=3,
-                train_soft_budget_param=None,
-                eval_hard_budget=3,
-                eval_soft_budget_param=None,
-            )
-        ),
-        preserve_index=False,
-    )
+    table = raw_table(
+        Evaluation(
+            method="alpha",
+            dataset="cube",
+            realization=0,
+            train_hard_budget=3,
+            train_soft_budget_param=None,
+            eval_hard_budget=3,
+            eval_soft_budget_param=None,
+        )
+    ).to_arrow()
     # A null soft-budget parameter and a NaN cost must stay distinct, and
     # the provenance record in the schema metadata must survive.
     table = table.set_column(
@@ -214,7 +211,7 @@ def test_raw_tables_round_trip_values_nulls_schema_and_histories(
         "accumulated_cost",
         pa.array([1.0, float("nan")]),
     ).replace_schema_metadata(
-        {**table.schema.metadata, PROVENANCE_METADATA_KEY: record}
+        {**(table.schema.metadata or {}), PROVENANCE_METADATA_KEY: record}
     )
     pq.write_table(table, raw_path)
     # Parquet names list items `element`, so compare with the written table.
@@ -236,16 +233,15 @@ def test_raw_tables_round_trip_values_nulls_schema_and_histories(
     costs = restored.column("accumulated_cost").to_pylist()
     assert costs[0] == 1.0
     assert math.isnan(costs[1])
-    # Selection histories, read with plain pandas: action 0 is stop and
-    # action i > 0 is selection i - 1.
-    read = pd.read_parquet(destination_root / ALPHA_RAW_TABLE)
+    # Selection histories: action 0 is stop; action i > 0 is selection i - 1.
+    read = pl.read_parquet(destination_root / ALPHA_RAW_TABLE)
     histories = {
-        int(episode): [
+        int(steps["episode_id"][0]): [
             int(action) - 1
-            for action in steps.sort_values("step")["action_performed"]
+            for action in steps.sort("step")["action_performed"]
             if action != 0
         ]
-        for episode, steps in read.groupby("episode_id")
+        for steps in read.partition_by("episode_id")
     }
     assert histories == {0: [2]}
 

@@ -15,10 +15,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-import pandas as pd
+import polars as pl
 import pytest
 import torch
 import yaml
+from polars.testing import assert_frame_equal
 from typer.testing import CliRunner
 
 from afabench.core.bundle_system.bundle import load_bundle, read_manifest
@@ -344,9 +345,9 @@ def test_restored_bundles_reproduce_a_smoke_evaluation(
     )
 
     assert evaluation.returncode == 0, evaluation.stdout + evaluation.stderr
-    pd.testing.assert_frame_equal(
-        pd.read_parquet(save_path),
-        pd.read_parquet(completed / "output/smoke" / GDFS_RAW_TABLE),
+    assert_frame_equal(
+        pl.read_parquet(save_path),
+        pl.read_parquet(completed / "output/smoke" / GDFS_RAW_TABLE),
     )
 
 

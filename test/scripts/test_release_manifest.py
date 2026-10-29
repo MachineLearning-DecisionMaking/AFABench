@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+import polars as pl
 import pytest
 import yaml
 from click.testing import Result
@@ -617,7 +617,7 @@ def test_tables_outside_the_evaluation_folders_need_no_record(
     write_catalog(source_root, Catalog(methods=[ALPHA]))
     merged = source_root / "merged_results/eval_perf/method_set-all.parquet"
     merged.parent.mkdir(parents=True)
-    pd.DataFrame({"afa_method": ["alpha"]}).to_parquet(merged)
+    pl.DataFrame({"afa_method": ["alpha"]}).write_parquet(merged)
 
     result = save(tmp_path)
 

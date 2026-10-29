@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pytest
 import yaml
 from click.testing import Result
@@ -369,8 +369,8 @@ def test_a_release_published_during_a_download_is_not_mixed_in(
     ]
     assert transformed
     for path in transformed:
-        table = pd.read_parquet(destination_root / path)
-        assert table["release"].tolist() == ["2026-10-full"]
+        table = pl.read_parquet(destination_root / path)
+        assert table["release"].to_list() == ["2026-10-full"]
 
 
 def alpha_table(

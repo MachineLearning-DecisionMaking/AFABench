@@ -2,7 +2,7 @@
 
 ## Contract
 
-`afabench.evaluation.schemas` defines Pandera pandas contracts, each
+`afabench.evaluation.schemas` defines Pandera Polars contracts, each
 extending `BatchEvaluationSchema` or `EvaluationSchema`:
 
 - `BatchEvaluationSchema`: one row per episode and zero-based `step`,
@@ -11,9 +11,6 @@ extending `BatchEvaluationSchema` or `EvaluationSchema`:
   `split_index`, returned by `eval_afa_method`.
 - `SavedEvaluationSchema`: the `EvaluationSchema` columns plus the identity
   columns below, added by `AFAEvaluator` before saving Parquet.
-- `PreProvenanceSavedEvaluationSchema`: the `EvaluationSchema` columns plus
-  nullable `eval_seed` and `eval_hard_budget`, without the additional
-  identity columns.
 
 `episode_id` identifies an episode, not a dataset position. It is batch-local
 for an individual `process_batch` call, but unique across all batches in one
@@ -44,16 +41,16 @@ not rejected actions or original policy intentions. Predictions use the
 pre-action observations, whereas cost includes the current action.
 Missing classifiers produce null probability vectors.
 
-Functions return `pandera.typing.DataFrame[EvaluationSchema]`. Runtime
+Functions return `polars.DataFrame`. Runtime
 validation rejects missing, unexpected, or duplicate column names and checks
 dtypes, nullability, and values without coercing dtypes. Each episode must
 have contiguous steps from zero, no duplicate steps, and exactly one stop at
 its final step. Row order is immaterial. Validation also runs after batch
 concatenation and before saving.
 
-Prediction fields use `Series[Any]` because pandas represents all-null
-columns differently from populated columns. Explicit element-wise checks
-enforce scalar integer class IDs.
+Probability columns use `List(Float64)`, including all-null columns.
+Integer identities, steps and actions use `Int64` in the in-memory evaluation
+schemas. Validation does not silently coerce invalid events.
 
 ## Class probabilities
 
@@ -69,7 +66,7 @@ specific exceptions naming invalid shapes or values. Single-logit binary
 outputs are not supported: binary classifiers return two-class vectors.
 
 Every recorded time step retains the full vector for each available
-classifier, ordered by label class index. Raw Parquet object cells store
+classifier, ordered by label class index. Raw Parquet list columns store
 `builtin_predicted_probabilities` and `external_predicted_probabilities` as
 floating vectors; unavailable classifiers have null vectors. Tables hold no
 class decisions: each consumer decides how to turn a vector into a class.
@@ -82,16 +79,16 @@ external results.
 A raw evaluation table identifies itself
 (`docs/adr/0002-provenance-recorded-in-artifacts.md`), whether the pipeline
 or a hand run of `scripts/eval/eval_afa_method.py` wrote it. Its identity
-columns are constant per table and use pandas nullable dtypes, which
-`pandas.read_parquet` restores without `afabench`:
+columns are constant per table and use nullable Polars dtypes, which
+`polars.read_parquet` restores without `afabench`:
 
 | Column | dtype | Value |
 | --- | --- | --- |
-| `afa_method` | `string` | Method name, from the method bundle's record. |
-| `dataset` | `string` | Dataset key, from the eval dataset bundle's record. |
+| `afa_method` | `String` | Method name, from the method bundle's record. |
+| `dataset` | `String` | Dataset key, from the eval dataset bundle's record. |
 | `dataset_realization_index` | `UInt64` | Dataset realization, from the eval dataset bundle's record. |
-| `eval_split` | `string` | `train`, `val` or `test`: the eval dataset bundle's own split. |
-| `initializer` | `string` | Name of the initializer config the evaluation selected, such as `cold`. Never null. |
+| `eval_split` | `String` | `train`, `val` or `test`: the eval dataset bundle's own split. |
+| `initializer` | `String` | Name of the initializer config the evaluation selected, such as `cold`. Never null. |
 | `train_seed` | `UInt64` | Seed of the method bundle's record. |
 | `train_hard_budget` | `Float64` | `hard_budget` of the method's training contract. |
 | `train_soft_budget_param` | `Float64` | `soft_budget_param` of the method's training contract. |
@@ -103,7 +100,7 @@ A value whose source bundle was written without a provenance record, or
 whose record lacks it, is null, not guessed. The pretraining seed, the Unmasker, the classifier and the rest
 of the configuration are in the table's provenance record only. The record
 is stored as JSON under the Arrow schema metadata key `afabench.provenance`;
-pandas drops it on read, so read it with
+Polars drops it on read, so read it with
 `afabench.evaluation.provenance.evaluation_table_provenance(path)`, which
 returns null for a table written without one.
 
@@ -119,18 +116,17 @@ Saving every selection-history prefix costs quadratic space per episode;
 scalar episode IDs, steps, and actions require linear space instead.
 
 ```python
-import pandas as pd
-from pandera.typing import DataFrame
+import polars as pl
 
 from afabench.evaluation.history import reconstruct_selection_history
 from afabench.evaluation.schemas import SavedEvaluationSchema
 
-results = DataFrame[SavedEvaluationSchema](pd.read_parquet(path))
+results = SavedEvaluationSchema.validate(pl.read_parquet(path))
 histories = reconstruct_selection_history(results)
 ```
 
-`reconstruct_selection_history` returns a Series aligned to the original row
-positions and index, even with reordered rows or duplicate index labels. For
+`reconstruct_selection_history` returns a Polars `List(Int64)` Series aligned
+to the input row positions, even with reordered rows. For
 step t it collects the episode's earlier positive actions, subtracting one
 from each. It preserves order and duplicates, excluding stop and initial
 observations. It validates complete episodes before reconstructing.
@@ -158,25 +154,24 @@ Its identity arguments (`--method`, `--dataset`, `--initializer`,
 `--train_seed`, `--train_hard_budget`, `--train_soft_budget_param`,
 `--eval_soft_budget_param`) are optional checks. An argument that disagrees
 with a non-null column raises `IdentityArgumentMismatchError`; `null` is an
-explicit null value and disagrees with a non-null column. A column that is
-missing or null is filled from its argument, or left null when the argument
-is omitted. The Snakemake rule passes its wildcards, so a raw table written
-before the identity columns existed is identified from them, except for
-`dataset_realization_index` and `eval_split`, which no argument names and
-which stay null.
+explicit null value and disagrees with a non-null column. A nullable column
+whose values are all null is filled from its argument, or left null when the
+argument is omitted. The input must validate against `SavedEvaluationSchema`
+before transformation: missing columns, incomplete episodes and older table
+shapes are rejected. The Snakemake rule passes its wildcards as checks.
 
 ### Loading and plotting
 
 `afabench.evaluation.tables.load_plotting_ready_table(path)` reads a
-plotting-ready table, or a merge of them, as a pandas DataFrame and casts
+plotting-ready table, or a merge of them, as a Polars DataFrame and casts
 each column it knows to its dtype in
 `afabench.evaluation.schemas.PLOTTING_READY_DTYPES`: the identity columns
 take the dtypes of `IDENTITY_DTYPES`, the rest are `UInt64`, `Float64`,
-`boolean` or `string`. Merging tables whose column types disagree upcasts
+`Boolean`, `String` or `List(Float64)`. Merging tables whose column types disagree upcasts
 those columns to strings, so in a numeric column values that do not parse
 as numbers become null. A number the column's dtype cannot hold, such as a
 fraction or a negative number in a `UInt64` column, and a value of a
-`boolean` column that is not bool-like raise `TypeError`. Absent columns
+`Boolean` column that is not boolean raise `TypeError`. Absent columns
 stay absent. It does not validate the table.
 
 Every evaluation plot reads its table through this function, and the same
@@ -211,7 +206,7 @@ A run missing any required class has undefined AUROC (`NaN`), not zero.
 If any run in a seed summary has undefined AUROC, both `mean_auroc` and
 `std_auroc` remain undefined; undefined runs are not silently dropped.
 Standard deviations use the sample convention, so a single seed also has
-undefined standard deviation. The existing accuracy and F1 summaries remain
+null standard deviation. The accuracy and F1 summaries are
 `mean_accuracy`, `std_accuracy`, `mean_f_score`, `std_f_score`.
 
 [Evaluation performance plots](evaluation_plots.md) documents headline metric

@@ -11,7 +11,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict
 
-import pandas as pd
+import polars as pl
 
 from afabench.compute_estimate.estimate import (
     IDENTITY_COLUMNS,
@@ -51,21 +51,23 @@ ESTIMATE_COLUMNS = [
     *HOUR_COLUMNS,
 ]
 # As in the job duration table, nullable
-PER_JOB_DTYPES = {
-    "rule": "string",
-    "wildcards": "string",
-    **{column: RECORD_FIELD_DTYPES[column] for column in IDENTITY_COLUMNS},
-    "device": "string",
-    "cpus": "Int64",
-    "gpus": "Int64",
-    "time_limit_minutes": "Int64",
-    "match_level": "string",
-    "matched_job_records": "Int64",
-    **dict.fromkeys([*DURATION_COLUMNS, *HOUR_COLUMNS], "Float64"),
-    "failure_history": "boolean",
-    "jobid": "Int64",
-    "dependencies": "string",
-}
+PER_JOB_DTYPES = pl.Schema(
+    {
+        "rule": pl.String,
+        "wildcards": pl.String,
+        **{column: RECORD_FIELD_DTYPES[column] for column in IDENTITY_COLUMNS},
+        "device": pl.String,
+        "cpus": pl.Int64,
+        "gpus": pl.Int64,
+        "time_limit_minutes": pl.Int64,
+        "match_level": pl.String,
+        "matched_job_records": pl.Int64,
+        **dict.fromkeys([*DURATION_COLUMNS, *HOUR_COLUMNS], pl.Float64),
+        "failure_history": pl.Boolean,
+        "jobid": pl.Int64,
+        "dependencies": pl.String,
+    }
+)
 GROUPING_COLUMNS = [column for column in JOB_COLUMNS if column != "wildcards"]
 DEFAULT_GROUPING = ["stage", "device"]
 COUNTED_MATCH_LEVELS: list[MatchLevel] = ["exact", "pooled", "unestimated"]
@@ -75,17 +77,17 @@ class UnknownGroupingColumnError(ValueError):
     """Totals were asked to be grouped by a column jobs do not have."""
 
 
-def per_job_table(estimate: ComputeEstimate) -> pd.DataFrame:
+def per_job_table(estimate: ComputeEstimate) -> pl.DataFrame:
     """
     Return one row per planned job: identity, allocation, estimate.
 
     `failure_history` flags jobs whose job type failed or timed out before.
     """
     failed_types = {history.job_type for history in estimate.failure_histories}
-    return pd.DataFrame(
+    return pl.DataFrame(
         [_per_job_row(job, failed_types) for job in estimate.jobs],
-        columns=pd.Index(list(PER_JOB_DTYPES)),
-    ).astype(PER_JOB_DTYPES)
+        schema=PER_JOB_DTYPES,
+    )
 
 
 def _per_job_row(
@@ -127,7 +129,7 @@ def check_grouping(by: Sequence[str]) -> None:
 
 def group_totals(
     estimate: ComputeEstimate, by: Sequence[str] = DEFAULT_GROUPING
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Total the estimated jobs' hours, mean and p90, per group of jobs.
 
@@ -137,31 +139,31 @@ def group_totals(
     """
     check_grouping(by)
     jobs = per_job_table(estimate)
-    counted = jobs.loc[jobs["match_level"].isin(COUNTED_MATCH_LEVELS)]
-    grouped = (
-        counted.loc[:, list(by)]
-        .assign(
-            **{
-                level: counted["match_level"].eq(level)
+    counted = jobs.filter(pl.col("match_level").is_in(COUNTED_MATCH_LEVELS))
+    return (
+        counted.group_by(list(by))
+        .agg(
+            pl.len().cast(pl.Int64).alias("jobs"),
+            *(
+                (pl.col("match_level") == level)
+                .sum()
+                .cast(pl.Int64)
+                .alias(level)
                 for level in COUNTED_MATCH_LEVELS
-            },
-            **{
-                column: counted[column].astype(float)
-                for column in HOUR_COLUMNS
-            },
+            ),
+            *(_nullable_sum(column) for column in HOUR_COLUMNS),
         )
-        .groupby(list(by), dropna=False, sort=True)
+        .sort(list(by), nulls_last=True)
     )
-    totals = pd.concat(
-        [
-            grouped[COUNTED_MATCH_LEVELS].sum(),
-            # Groups of only unestimated jobs have no total.
-            grouped[HOUR_COLUMNS].sum(min_count=1),
-        ],
-        axis=1,
+
+
+def _nullable_sum(column: str) -> pl.Expr:
+    # Polars sums an all-null group to zero; unknown hours must stay unknown.
+    return (
+        pl.when(pl.col(column).count() > 0)
+        .then(pl.col(column).sum())
+        .alias(column)
     )
-    totals.insert(0, "jobs", totals[COUNTED_MATCH_LEVELS].sum(axis=1))
-    return totals.reset_index()
 
 
 def format_report(
@@ -172,7 +174,7 @@ def format_report(
 ) -> str:
     """Return the report `estimate-compute` prints, naming `source`."""
     jobs = per_job_table(estimate)
-    counts = jobs["match_level"].value_counts()
+    counts = dict(jobs["match_level"].value_counts().iter_rows())
     hardware = estimate.hardware
     lines = [
         f"Compute estimate of {_plural(len(jobs), 'planned job')}: "
@@ -191,13 +193,17 @@ def format_report(
     if refused:
         lines.append(f"Refused {_plural(refused, 'smoke-test job record')}")
     totals = group_totals(estimate, by)
-    overall = {
-        **dict.fromkeys(by, ""),
-        **totals[["jobs", *COUNTED_MATCH_LEVELS]].sum(),
-        **totals[HOUR_COLUMNS].sum(min_count=1),
-    }
-    overall[by[0]] = "total"
-    totals = pd.concat([totals, pd.DataFrame([overall])], ignore_index=True)
+    overall = totals.select(
+        *(
+            pl.lit("total" if column == by[0] else "").alias(column)
+            for column in by
+        ),
+        pl.col(["jobs", *COUNTED_MATCH_LEVELS]).sum(),
+        *(_nullable_sum(column) for column in HOUR_COLUMNS),
+    )
+    totals = pl.concat(
+        [totals.with_columns(pl.col(list(by)).cast(pl.String)), overall]
+    )
     lines += [
         "",
         f"Totals by {' and '.join(by)} in hours, unestimated jobs not "
@@ -207,17 +213,16 @@ def format_report(
         *_wall_time_lines(estimate),
         "",
     ]
-    unestimated = jobs.loc[jobs["match_level"] == "unestimated"]
-    if unestimated.empty:
+    unestimated = jobs.filter(pl.col("match_level") == "unestimated")
+    if unestimated.is_empty():
         lines.append("Unestimated jobs: none")
     else:
         lines += [
             "Unestimated jobs, not in the totals:",
             _table(
-                unestimated.loc[:, POOL_COLUMNS]
-                .value_counts(dropna=False)
-                .sort_index()
-                .reset_index(name="jobs")
+                unestimated.group_by(POOL_COLUMNS)
+                .len(name="jobs")
+                .sort(POOL_COLUMNS, nulls_last=True)
             ),
         ]
     lines.append("")
@@ -231,18 +236,22 @@ def format_report(
             ),
             "",
         ]
-    without_records = jobs.loc[
-        jobs["match_level"] == "no_job_record", "rule"
-    ].value_counts(sort=False)
-    if not without_records.empty:
+    without_records = (
+        jobs.filter(pl.col("match_level") == "no_job_record")
+        .group_by("rule", maintain_order=True)
+        .len()
+    )
+    if not without_records.is_empty():
         lines.append(
             "Not estimated, rules without job records: "
             + ", ".join(
-                f"{rule} ({count})" for rule, count in without_records.items()
+                f"{rule} ({count})"
+                for rule, count in without_records.iter_rows()
             )
         )
     unknown_cpus = (
-        jobs["mean_core_hours"].isna() & jobs["mean_job_hours"].notna()
+        jobs["mean_core_hours"].is_null()
+        & jobs["mean_job_hours"].is_not_null()
     )
     if unknown_cpus.any():
         lines.append(
@@ -317,17 +326,29 @@ def _failure_warning(history: FailureHistory) -> str:
     return f"{job_type.stage} {names} {', '.join(attempts)}"
 
 
-def _table(table: pd.DataFrame) -> str:
-    formatted = pd.DataFrame(
-        {
-            column: values.map("{:.2f}".format, na_action="ignore")
-            if pd.api.types.is_float_dtype(values)
-            else values
-            for column, values in table.items()
-        }
+def _table(table: pl.DataFrame) -> str:
+    columns = [
+        [
+            column,
+            *(
+                "-"
+                if value is None
+                else f"{value:.2f}"
+                if dtype.is_float()
+                else str(value)
+                for value in table[column]
+            ),
+        ]
+        for column, dtype in table.schema.items()
+    ]
+    widths = [max(map(len, column)) for column in columns]
+    return "\n".join(
+        " ".join(
+            value.rjust(width)
+            for value, width in zip(row, widths, strict=True)
+        )
+        for row in zip(*columns, strict=True)
     )
-    shown = formatted.astype(object)
-    return shown.where(shown.notna(), "-").to_string(index=False)
 
 
 def _plural(count: int, noun: str) -> str:

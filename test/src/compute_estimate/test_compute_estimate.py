@@ -10,7 +10,7 @@ from dataclasses import replace
 from itertools import count
 from pathlib import Path
 
-import pandas as pd
+import polars as pl
 import pytest
 
 from afabench.compute_estimate.estimate import (
@@ -53,7 +53,7 @@ class JobRecords:
     def add(
         self,
         identity: JobIdentity,
-        job_duration_seconds: float,
+        job_duration_seconds: float | None,
         *,
         device: str = "cuda",
         cpus: int | None = 4,
@@ -87,7 +87,7 @@ class JobRecords:
             ),
         )
 
-    def table(self) -> pd.DataFrame:
+    def table(self) -> pl.DataFrame:
         return load_job_duration_table(self.output_root)
 
 
@@ -331,7 +331,7 @@ def test_totals_group_by_stage_and_device_by_default(
 
     totals = group_totals(estimate)
 
-    assert totals.to_dict("records") == [
+    assert totals.to_dicts() == [
         {
             "stage": "training",
             "device": "cpu",
@@ -371,21 +371,19 @@ def test_totals_regroup_by_other_columns(records: JobRecords) -> None:
     by_name = group_totals(estimate, ["name"])
     by_dataset = group_totals(estimate, ["dataset_key"])
 
-    assert by_name.loc[:, ["name", "jobs", "mean_core_hours"]].to_dict(
-        "records"
-    ) == [
+    assert by_name.select("name", "jobs", "mean_core_hours").to_dicts() == [
         {"name": "alpha", "jobs": 2, "mean_core_hours": 2.0},
         {"name": "beta", "jobs": 2, "mean_core_hours": 8.0},
     ]
-    assert by_dataset.loc[:, ["dataset_key", "exact", "unestimated"]].to_dict(
-        "records"
-    ) == [
+    assert by_dataset.select(
+        "dataset_key", "exact", "unestimated"
+    ).to_dicts() == [
         {"dataset_key": "cube", "exact": 2, "unestimated": 0},
         {"dataset_key": "mnist", "exact": 0, "unestimated": 2},
     ]
     # Unestimated jobs are not in the totals
-    assert by_dataset.loc[0, "mean_job_hours"] == 3.0
-    assert pd.isna(by_dataset.loc[1, "mean_job_hours"])
+    assert by_dataset[0, "mean_job_hours"] == 3.0
+    assert by_dataset[1, "mean_job_hours"] is None
 
 
 def test_totals_refuse_an_unknown_grouping_column(
@@ -509,7 +507,7 @@ def test_the_per_job_table_flags_jobs_whose_type_failed_before(
 
     jobs = per_job_table(estimate)
 
-    assert jobs["failure_history"].tolist() == [True, False, False]
+    assert jobs["failure_history"].to_list() == [True, False, False]
 
 
 ALPHA_EVALUATION = replace(ALPHA_TRAINING, stage="evaluation")
@@ -624,13 +622,103 @@ def test_the_per_job_table_holds_each_job_s_dependencies(
 
     jobs = per_job_table(estimate)
 
-    assert jobs["jobid"].tolist() == [
+    assert jobs["jobid"].to_list() == [
         alpha.jobid,
         beta.jobid,
         evaluation.jobid,
     ]
-    assert jobs["dependencies"].tolist() == [
+    assert jobs["dependencies"].to_list() == [
         "[]",
         "[]",
         f"[{alpha.jobid}, {beta.jobid}]",
     ]
+
+
+def test_empty_estimate_has_typed_tables_and_unknown_totals(
+    records: JobRecords,
+) -> None:
+    estimate = estimate_compute([], records.table())
+
+    jobs = per_job_table(estimate)
+    totals = group_totals(estimate)
+    report = format_report(estimate, source="empty")
+
+    assert isinstance(jobs, pl.DataFrame)
+    assert jobs.is_empty()
+    assert jobs.schema["train_seed"] == pl.Int64
+    assert jobs.schema["mean_job_hours"] == pl.Float64
+    assert totals.is_empty()
+    assert "0 planned jobs: 0 exact, 0 pooled, 0 unestimated" in report
+    assert "Minimal wall time: unknown" in report
+
+
+def test_totals_keep_null_groups_and_all_unknown_hours(
+    records: JobRecords,
+) -> None:
+    generation = JobIdentity(stage="dataset_generation", dataset_key="cube")
+    records.add(generation, 3600, device="cpu", cpus=None, gpus=0)
+    estimate = estimate_compute(
+        [
+            planned(generation, device="cpu", cpus=None, gpus=0),
+            planned(replace(ALPHA_TRAINING, dataset_key="mnist")),
+        ],
+        records.table(),
+    )
+
+    totals = group_totals(estimate, ["name"])
+
+    assert totals.select(
+        "name", "jobs", "mean_job_hours", "mean_core_hours"
+    ).to_dicts() == [
+        {
+            "name": "alpha",
+            "jobs": 1,
+            "mean_job_hours": None,
+            "mean_core_hours": None,
+        },
+        {
+            "name": None,
+            "jobs": 1,
+            "mean_job_hours": 1.0,
+            "mean_core_hours": None,
+        },
+    ]
+
+
+def test_matched_completed_unknown_duration_stays_unknown_in_summary_and_report(
+    records: JobRecords,
+) -> None:
+    records.add(ALPHA_TRAINING, None)
+
+    estimate = estimate_compute([planned(ALPHA_TRAINING)], records.table())
+
+    (job,) = estimate.jobs
+    assert job.match_level == "exact"
+    assert job.matched_job_records == 1
+    assert job.mean_job_duration_seconds is None
+    assert job.p90_job_duration_seconds is None
+    assert (
+        per_job_table(estimate)
+        .select(
+            "mean_job_duration_seconds",
+            "p90_job_duration_seconds",
+            "mean_job_hours",
+            "p90_job_hours",
+            "mean_core_hours",
+            "p90_core_hours",
+            "mean_gpu_hours",
+            "p90_gpu_hours",
+        )
+        .row(0)
+        == (None,) * 8
+    )
+    assert group_totals(estimate)[0, "mean_job_hours"] is None
+    report = format_report(estimate, source="unknown")
+    assert "1 planned job: 1 exact, 0 pooled, 0 unestimated" in report
+    assert "Minimal wall time: unknown, no planned job is estimated" in report
+    total = next(
+        line
+        for line in report.splitlines()
+        if line.strip().startswith("total")
+    )
+    assert total.split() == ["total", "1", "1", "0", "0", *["-"] * 6]

@@ -8,7 +8,6 @@ import torch
 import wandb
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
-from pandera.typing import DataFrame
 
 from afabench.components.initializers.utils import (
     get_afa_initializer_from_config,
@@ -42,6 +41,7 @@ from afabench.evaluation.schemas import (
 from afabench.fit.smoke_test import eval_settings
 
 if TYPE_CHECKING:
+    import polars as pl
     from wandb.sdk.wandb_run import Run
 
     from afabench.core.types import AFAInitializer, AFAUnmasker
@@ -79,7 +79,7 @@ class AFAEvaluator:
         self._external_classifier: AFAClassifier | None = None
         self._n_selection_choices: int | None = None
         self._selection_costs: torch.Tensor | None = None
-        self._df_eval: DataFrame[SavedEvaluationSchema] | None = None
+        self._df_eval: pl.DataFrame | None = None
 
     def run(self) -> None:
         # The evaluator owns the seed (ADR 0002): a null seed is drawn once
@@ -271,9 +271,12 @@ class AFAEvaluator:
             initializer_name=self._initializer_name,
             cfg=self._cfg,
         )
-        for name, value in identity.items():
-            df_eval[name] = identity_column(name, value, df_eval.index)
-        self._df_eval = DataFrame[SavedEvaluationSchema](df_eval)
+        self._df_eval = SavedEvaluationSchema.validate(
+            df_eval.with_columns(
+                identity_column(name, value, len(df_eval))
+                for name, value in identity.items()
+            )
+        )
 
     def _capture_provenance(
         self, method_record: ProvenanceRecord | None
