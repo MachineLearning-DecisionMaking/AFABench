@@ -1,10 +1,19 @@
 from dataclasses import dataclass
+from enum import StrEnum
 
 from afabench.fit.contract import (
     PretrainingContract,
     TrainingContract,
     store_contract_config,
 )
+
+#TODO: add datasets per better synth generation
+class FeatureSource(StrEnum):
+    """Where the features of L2M's tasks come from; config values are the names."""
+
+    real = "real"
+    synthetic = "synthetic"
+
 
 # `RealDataSampler.sample` always gives a task this many context instances
 # (its `num_ctx` default), so a task needs more instances than this.
@@ -52,6 +61,8 @@ class L2MArchitectureConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class L2MPretrainingConfig(PretrainingContract):
+    # See `draw_feature_pool`.
+    feature_source: FeatureSource
     architecture: L2MArchitectureConfig
     # Tasks per step, and instances per task.
     batch_size: int
@@ -79,6 +90,8 @@ store_contract_config(name="pretrain_l2m", config_class=L2MPretrainingConfig)
 
 @dataclass(frozen=True, kw_only=True)
 class L2MTrainingConfig(TrainingContract):
+    # The pretrained model's feature source, see `draw_feature_pool`.
+    feature_source: FeatureSource
     # Tasks per step, and instances per task.
     batch_size: int
     sequence_length: int

@@ -32,7 +32,7 @@ from afabench.components.methods.discriminative.l2m.upstream.utils import (
 )
 from afabench.components.methods.discriminative.l2m.upstream_fit import (
     UpstreamAccelerator,
-    draw_pretraining_pool,
+    draw_feature_pool,
     fit_upstream,
     generate_validation_tasks,
     make_sampler,
@@ -40,7 +40,7 @@ from afabench.components.methods.discriminative.l2m.upstream_fit import (
 )
 from afabench.fit.inputs import FitInputs
 
-
+#TODO: try to use existing benchmarks if possible
 def pretrain_l2m(
     cfg: L2MPretrainingConfig,
     metric_logger: Callable[[dict[str, float]], None] | None = None,
@@ -56,8 +56,9 @@ def pretrain_l2m(
         **asdict(cfg.architecture),
     ).to(device)
     sampler = make_sampler(
-        draw_pretraining_pool(
+        draw_feature_pool(
             train_dataset,
+            feature_source=cfg.feature_source,
             size=cfg.pretraining_pool_size,
             sequence_length=cfg.sequence_length,
             seed=cfg.seed,

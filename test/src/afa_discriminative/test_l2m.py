@@ -12,6 +12,7 @@ from afabench.components.methods.discriminative.l2m.afa_methods import (
     L2MAFAMethod,
 )
 from afabench.components.methods.discriminative.l2m.config import (
+    FeatureSource,
     L2MArchitectureConfig,
     L2MPretrainingConfig,
     L2MTrainingConfig,
@@ -26,19 +27,23 @@ from afabench.components.methods.discriminative.l2m.pretrain import (
 from afabench.components.methods.discriminative.l2m.train import (
     train_l2m,
 )
+from afabench.components.methods.discriminative.l2m.upstream_fit import (
+    draw_synthetic_pool,
+)
 from afabench.components.unmaskers.config import UnmaskerConfig
 from afabench.core.bundle_system.bundle import load_bundle, save_bundle
 from afabench.datasets import CubeDataset
 from afabench.fit.inputs import load_inputs
 from afabench.testing.provenance import placeholder_provenance
 
+#TODO: see if we need to adapt our model to this
 N_FEATURES = 20
 N_CLASSES = 8
 # Every upstream task has 50 context instances, so a task needs more.
 SEQUENCE_LENGTH = 56
 CPU = torch.device("cpu")
 
-
+#TODO: try to get already existing model loaded, instead of training new test partners
 @pytest.fixture(autouse=True)
 def _single_thread() -> Iterator[None]:
     # The fits are many tiny kernels, which stall when every test worker
@@ -82,9 +87,11 @@ def _pretraining_config(
     *,
     train_dataset: CubeDataset | None = None,
     mixed_precision: bool = False,
+    feature_source: FeatureSource = FeatureSource.real,
 ) -> L2MPretrainingConfig:
     return L2MPretrainingConfig(
         **_contract_values(tmp_path, train_dataset),  # pyright: ignore[reportArgumentType]
+        feature_source=feature_source,
         architecture=L2MArchitectureConfig(
             model_dim=8,
             embedding_depth=1,
@@ -122,10 +129,14 @@ def _small_model(n_features: int, n_classes: int) -> L2MModel:
 
 
 def _training_config(
-    tmp_path: Path, *, hard_budget: int | None = 3
+    tmp_path: Path,
+    *,
+    hard_budget: int | None = 3,
+    feature_source: FeatureSource = FeatureSource.real,
 ) -> L2MTrainingConfig:
     return L2MTrainingConfig(
         **_contract_values(tmp_path),  # pyright: ignore[reportArgumentType]
+        feature_source=feature_source,
         method_name="l2m",
         pretrained_model_bundle_path=_save(
             _small_model(N_FEATURES, N_CLASSES), tmp_path / "pretrained.bundle"
@@ -222,6 +233,62 @@ def test_pretraining_requires_a_train_split_that_fills_a_task(
     )
     with pytest.raises(ValueError, match=f"sequence_length={SEQUENCE_LENGTH}"):
         pretrain_l2m(cfg, inputs=load_inputs(cfg))
+
+
+def test_synthetic_pool_is_uniform_on_the_box_and_seeded() -> None:
+    pool = draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=4)
+
+    assert pool.shape == (500, N_FEATURES)
+    assert pool.min() >= -2.0
+    assert pool.max() <= 2.0
+    assert torch.equal(
+        pool, draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=4)
+    )
+    assert not torch.equal(
+        pool, draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=5)
+    )
+
+
+def test_synthetic_pretraining_ignores_the_train_split_data(
+    tmp_path: Path,
+) -> None:
+    other_features = CubeDataset(n_samples=96, seed=7)
+    models = []
+    for name, train_dataset in [("a", None), ("b", other_features)]:
+        (tmp_path / name).mkdir()
+        cfg = _pretraining_config(
+            tmp_path / name,
+            train_dataset=train_dataset,
+            feature_source=FeatureSource.synthetic,
+        )
+        models.append(pretrain_l2m(cfg, inputs=load_inputs(cfg)))
+
+    for first, second in zip(
+        models[0].parameters(), models[1].parameters(), strict=True
+    ):
+        assert torch.equal(first, second)
+
+
+def test_synthetic_pretraining_needs_no_full_task_in_the_train_split(
+    tmp_path: Path,
+) -> None:
+    cfg = _pretraining_config(
+        tmp_path,
+        train_dataset=CubeDataset(n_samples=SEQUENCE_LENGTH - 1, seed=0),
+        feature_source=FeatureSource.synthetic,
+    )
+
+    model = pretrain_l2m(cfg, inputs=load_inputs(cfg))
+
+    assert (model.n_features, model.n_classes) == (N_FEATURES, N_CLASSES)
+
+
+def test_synthetic_training_returns_a_method(tmp_path: Path) -> None:
+    cfg = _training_config(tmp_path, feature_source=FeatureSource.synthetic)
+
+    method = train_l2m(cfg, inputs=load_inputs(cfg))
+
+    assert method.context_features.shape == (8, N_FEATURES)
 
 
 def test_training_returns_a_method_that_survives_its_bundle(

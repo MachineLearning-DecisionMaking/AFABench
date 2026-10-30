@@ -12,7 +12,8 @@ validated unless it falls on the interval.
 The task prior is upstream's: tasks draw instances from the pretraining
 pool, normalize each feature within the task, and label them with a random
 BNN. Only the pool's features are used; the train split's labels are
-discarded.
+discarded. The pool is the train split's features (`FeatureSource.real`) or
+a synthetic draw of the dataset's feature count (`FeatureSource.synthetic`).
 """
 
 import logging
@@ -23,6 +24,9 @@ from typing import Any
 
 import torch
 
+from afabench.components.methods.discriminative.l2m.config import (
+    FeatureSource,
+)
 from afabench.components.methods.discriminative.l2m.models import (
     L2MModel,
 )
@@ -42,6 +46,10 @@ log = logging.getLogger(__name__)
 _UPSTREAM_SIMULATION = "sim"
 # Upstream's `inner_loop_steps` for MiniBooNE: one update per batch.
 _INNER_LOOP_STEPS = 1
+# The synthetic feature source's box, this benchmark's own choice as in the
+# earlier port; the paper does not describe it.
+_SYNTHETIC_FEATURE_LOW = -2.0
+_SYNTHETIC_FEATURE_HIGH = 2.0
 
 
 class UpstreamAccelerator:
@@ -125,6 +133,55 @@ def draw_pretraining_pool(
         : min(len(features), size)
     ]
     return features.reshape(len(features), -1)[indices].clone()
+
+
+def draw_synthetic_pool(*, size: int, n_features: int, seed: int) -> Features:
+    """
+    Draw `size` instances uniformly from the box [-2, 2] in every feature.
+
+    Stub of the synthetic feature prior of the earlier independent L2M port
+    (`l2m_synthetic_feature_prior`, `task_sampler.py` at `f814beec^`). That
+    port drew fresh features for every task; here the tasks sample from one
+    fixed pool, as they do from the real pretraining pool, and label and
+    missingness come from upstream's task prior. Features are normalized
+    within each task, so the box only sets the shape of the marginals.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    return _SYNTHETIC_FEATURE_LOW + (
+        _SYNTHETIC_FEATURE_HIGH - _SYNTHETIC_FEATURE_LOW
+    ) * torch.rand(size, n_features, generator=generator)
+
+
+def draw_feature_pool(
+    train_dataset: AFADataset,
+    *,
+    feature_source: FeatureSource,
+    size: int,
+    sequence_length: int,
+    seed: int,
+) -> Features:
+    """
+    Draw the pool the tasks' instances are sampled from.
+
+    The real source samples the train split's features, which it caps at
+    the split's size; the synthetic source ignores the data and takes only
+    its feature count. A task needs `sequence_length` instances, so
+    `size` must be at least that, as the configs check.
+    """
+    match feature_source:
+        case FeatureSource.real:
+            return draw_pretraining_pool(
+                train_dataset,
+                size=size,
+                sequence_length=sequence_length,
+                seed=seed,
+            )
+        case FeatureSource.synthetic:
+            return draw_synthetic_pool(
+                size=size,
+                n_features=train_dataset.feature_shape.numel(),
+                seed=seed,
+            )
 
 
 def make_sampler(pool: Features, *, label_dim: int) -> RealDataSampler:

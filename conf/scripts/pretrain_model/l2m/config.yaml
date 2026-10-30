@@ -20,6 +20,9 @@ defaults:
 # reAIM-Lab/Learning-To-Measure at the vendored commit), the family default.
 # dataset_override/<dataset_key>.yaml applies the authors' dataset config.
 
+# real: the train split's features; synthetic: uniform on [-2, 2], with only
+# the dataset's feature count (see draw_feature_pool).
+feature_source: real
 architecture:
   model_dim: 256 # d_model
   embedding_depth: 4 # emb_depth
