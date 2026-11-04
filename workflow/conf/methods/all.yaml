@@ -15,3 +15,4 @@ methods:
   - aaco
   - aaco_nn
   - l2m
+  - l2m_tabicl_prior

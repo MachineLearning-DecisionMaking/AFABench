@@ -234,14 +234,17 @@ term)
 
 **Task prior**:
 The distribution that an in-context method's fit stages draw their
-training tasks from: instances drawn from the pretraining pool, labelled
-by a synthetic labelling function.
+training tasks from. A pool task prior draws a task's instances from the
+pretraining pool and labels them by a synthetic labelling function. The
+TabICL task prior has no pool: it generates each task's features and
+labels together, with the dataset's feature and class counts.
 _Avoid_: Pretraining prior, synthetic prior (ambiguous about which half is
 synthetic), BNN prior (one choice of labelling function)
 
 **Pretraining pool**:
-The train-split instances that a task prior draws its instances from.
-Only their features are used; their labels are discarded.
+The instances that a pool task prior draws its instances from: the train
+split's features, whose labels are discarded, or draws that share only the
+dataset's feature count.
 _Avoid_: Pretraining set, pretraining data
 
 **Context set**:

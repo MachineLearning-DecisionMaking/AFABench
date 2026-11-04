@@ -20,9 +20,14 @@ defaults:
 # reAIM-Lab/Learning-To-Measure at the vendored commit), the family default.
 # dataset_override/<dataset_key>.yaml applies the authors' dataset config.
 
-# real: the train split's features; synthetic: uniform on [-2, 2], with only
-# the dataset's feature count (see draw_feature_pool).
-feature_source: real
+# real_pool: tasks draw instances from the train split's features;
+# synthetic_pool: from uniform draws on [-2, 2] with only the dataset's
+# feature count (see make_task_sampler); both label them with upstream's
+# random BNN. tabicl_v1: the TabICL v1 prior generates features and labels
+# with the dataset's feature and class counts (task_workers processes
+# generate them ahead of use; pretraining_pool_size is then unused).
+task_prior: real_pool
+task_workers: 0
 architecture:
   model_dim: 256 # d_model
   embedding_depth: 4 # emb_depth

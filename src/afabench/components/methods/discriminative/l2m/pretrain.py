@@ -2,7 +2,7 @@
 L2M pretraining stage: upstream's `real_train` on the fit contract.
 
 The classifier learns to predict query instances' labels from a context set
-on tasks from upstream's task prior, with the vendored
+on tasks from the configured task prior (`TaskPrior`), with the vendored
 `predictor_training_step`: every step acquires random features one at a
 time, from none to all, and sums the classifier loss over the trajectory.
 The learning rate warms up linearly and decays linearly to zero, as
@@ -32,15 +32,19 @@ from afabench.components.methods.discriminative.l2m.upstream.utils import (
 )
 from afabench.components.methods.discriminative.l2m.upstream_fit import (
     UpstreamAccelerator,
-    draw_feature_pool,
     fit_upstream,
     generate_validation_tasks,
-    make_sampler,
+    make_task_sampler,
+    training_batches,
     upstream_config,
 )
 from afabench.fit.inputs import FitInputs
 
-#TODO: try to use existing benchmarks if possible
+# The stage's own stream of seeded batches, apart from training's.
+PRETRAINING_STREAM = 0
+
+
+# TODO: try to use existing benchmarks if possible
 def pretrain_l2m(
     cfg: L2MPretrainingConfig,
     metric_logger: Callable[[dict[str, float]], None] | None = None,
@@ -55,15 +59,13 @@ def pretrain_l2m(
         train_dataset.label_shape.numel(),
         **asdict(cfg.architecture),
     ).to(device)
-    sampler = make_sampler(
-        draw_feature_pool(
-            train_dataset,
-            feature_source=cfg.feature_source,
-            size=cfg.pretraining_pool_size,
-            sequence_length=cfg.sequence_length,
-            seed=cfg.seed,
-        ),
-        label_dim=model.label_dim,
+    sampler = make_task_sampler(
+        train_dataset,
+        model,
+        task_prior=cfg.task_prior,
+        pool_size=cfg.pretraining_pool_size,
+        sequence_length=cfg.sequence_length,
+        seed=cfg.seed,
     )
     config = upstream_config(
         model,
@@ -89,13 +91,7 @@ def pretrain_l2m(
     selector_fn = ConcreteSelector()
 
     def training_step() -> float:
-        batch = sampler.sample(
-            batch_size=cfg.batch_size,
-            max_num_points=cfg.sequence_length,
-            num_observed=model.n_features,
-            # Upstream annotates the device as a string.
-            device=str(device),
-        )
+        batch = next(batches)
         return float(
             predictor_training_step(
                 config,
@@ -113,16 +109,27 @@ def pretrain_l2m(
         loss, _ = upstream_eval(config, sampler, model.ltm, accelerator)
         return float(loss)
 
-    fit_upstream(
-        model,
-        accelerator,
-        stage="pretrain",
+    with training_batches(
+        sampler,
         n_steps=cfg.n_steps,
-        checkpoint_interval=cfg.checkpoint_interval,
-        training_step=training_step,
-        validation_loss=validation_loss,
-        metric_logger=metric_logger,
-    )
+        batch_size=cfg.batch_size,
+        sequence_length=cfg.sequence_length,
+        n_features=model.n_features,
+        seed=cfg.seed,
+        stream=PRETRAINING_STREAM,
+        device=device,
+        n_workers=cfg.task_workers,
+    ) as batches:
+        fit_upstream(
+            model,
+            accelerator,
+            stage="pretrain",
+            n_steps=cfg.n_steps,
+            checkpoint_interval=cfg.checkpoint_interval,
+            training_step=training_step,
+            validation_loss=validation_loss,
+            metric_logger=metric_logger,
+        )
     return model.cpu().eval()
 
 

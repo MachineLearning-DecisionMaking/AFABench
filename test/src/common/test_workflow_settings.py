@@ -79,8 +79,14 @@ def test_no_method_runs_metabric_in_the_soft_budget_setting(
         warnings.simplefilter("ignore")
         settings = load_config(_shipped_all_profile(soft_budget_profile))
 
-    for method, per_dataset in settings.budget_params.items():
-        combinations = per_dataset["metabric"]
+    on_metabric = {
+        method: per_dataset["metabric"]
+        for method, per_dataset in settings.budget_params.items()
+        # l2m_tabicl_prior is trained for the cube's shapes and ignores the
+        # other datasets.
+        if method != "l2m_tabicl_prior"
+    }
+    for method, combinations in on_metabric.items():
         assert combinations, method
         assert all(eval_hard != "null" for _, eval_hard, _, _ in combinations)
 
@@ -97,6 +103,35 @@ def test_l2m_trains_one_policy_for_every_metabric_hard_budget(
 
     combinations = settings.budget_params["l2m"]["metabric"]
     assert {train for train, _, _, _ in combinations} == {7}
+
+
+def test_l2m_tabicl_prior_runs_only_on_the_cube_with_one_trained_policy() -> (
+    None
+):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        settings = load_config(_shipped_all_profile("all"))
+
+    runs = {
+        dataset: combinations
+        for dataset, combinations in settings.budget_params[
+            "l2m_tabicl_prior"
+        ].items()
+        if combinations
+    }
+    assert set(runs) == {"cube"}
+    assert {train for train, _, _, _ in runs["cube"]} == {10}
+    # Both stages generate their tasks from the same prior and task size.
+    prior_params = "task_prior=tabicl_v1 sequence_length=250 task_workers=4"
+    assert (
+        settings.pretraining_script("l2m_tabicl_prior").script_params
+        == prior_params
+    )
+    assert (
+        settings.training_script("l2m_tabicl_prior").script_params
+        == prior_params
+    )
+    assert settings.training_script("l2m").script_params == ""
 
 
 def test_load_config_uses_pipeline_defaults() -> None:

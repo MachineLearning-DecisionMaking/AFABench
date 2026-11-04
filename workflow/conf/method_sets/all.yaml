@@ -24,6 +24,7 @@ method_sets:
     - eddi_external
   l2m:
     - l2m
+    - l2m_tabicl_prior
   # Methods that we compare heatmaps for
   heatmap_comparison:
     - ol_with_mask

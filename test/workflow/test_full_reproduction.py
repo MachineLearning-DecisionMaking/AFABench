@@ -27,6 +27,9 @@ FORMER_GPU_METHODS = {
     "eddi_external",
     "dime",
 }
+# Methods added since, which run on the GPU nodes and have jobs on the cube.
+# (l2m has none there: it ignores the cube.)
+GPU_METHODS_ADDED_SINCE = {"l2m_tabicl_prior"}
 # Membership of the retired workflow/conf/methods/cpu.yaml.
 FORMER_CPU_METHODS = {
     "ol_without_mask",
@@ -77,7 +80,10 @@ SMALL_SELECTION = ["datasets=[cube]", "dataset_realization_indices=[0]"]
 @pytest.mark.parametrize(
     ("pipeline_profile", "methods"),
     [
-        ("all", FORMER_GPU_METHODS | FORMER_CPU_METHODS),
+        (
+            "all",
+            FORMER_GPU_METHODS | FORMER_CPU_METHODS | GPU_METHODS_ADDED_SINCE,
+        ),
         ("kdd26", KDD26_METHODS),
     ],
 )
@@ -119,7 +125,9 @@ def test_cluster_pipeline_profile_declares_former_six_stage_hardware(
         } == methods
         for method in methods:
             assert devices[rule, method] == (
-                {"cuda"} if method in FORMER_GPU_METHODS else {"cpu"}
+                {"cuda"}
+                if method in FORMER_GPU_METHODS | GPU_METHODS_ADDED_SINCE
+                else {"cpu"}
             )
 
 

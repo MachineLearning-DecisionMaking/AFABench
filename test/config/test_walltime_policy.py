@@ -25,8 +25,8 @@ def test_arrhenius_l2m_training_limit_is_dataset_specific() -> None:
     site = yaml.safe_load(site_path.read_text())
     walltime = WalltimePolicy(
         site["walltime"],
-        methods={"l2m", "dime"},
-        pretrained_models={"l2m"},
+        methods={"l2m", "dime", "l2m_tabicl_prior"},
+        pretrained_models={"l2m", "l2m_tabicl_prior"},
         datasets={"miniboone_subset", "metabric", "cube"},
     )
 
@@ -36,6 +36,26 @@ def test_arrhenius_l2m_training_limit_is_dataset_specific() -> None:
     assert walltime.minutes("train_method", "dime", "miniboone_subset") == 240
     assert walltime.minutes("pretrain_model", "l2m", "miniboone_subset") == 240
     assert walltime.minutes("pretrain_model", "l2m", "metabric") == 480
+
+
+def test_arrhenius_l2m_tabicl_prior_limits_are_the_cube_upper_bounds() -> None:
+    site_path = (
+        Path(__file__).resolve().parents[2]
+        / "workflow/profiles/site/arrhenius/site.yaml"
+    )
+    site = yaml.safe_load(site_path.read_text())
+    walltime = WalltimePolicy(
+        site["walltime"],
+        methods={"l2m", "l2m_tabicl_prior"},
+        pretrained_models={"l2m", "l2m_tabicl_prior"},
+        datasets={"miniboone_subset", "metabric", "cube"},
+    )
+
+    assert (
+        walltime.minutes("pretrain_model", "l2m_tabicl_prior", "cube") == 360
+    )
+    assert walltime.minutes("train_method", "l2m_tabicl_prior", "cube") == 720
+    assert walltime.minutes("pretrain_model", "l2m", "cube") == 240
 
 
 def test_walltime_uses_the_most_specific_available_limit() -> None:

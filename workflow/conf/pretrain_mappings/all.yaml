@@ -40,6 +40,14 @@ pretrain_mapping:
     pretrain_script_name: "l2m"
     pretrain_params: []
 
+  # L2M on tasks from the TabICL v1 prior with the cube's 20 features and 8
+  # classes, 200 query instances after the 50 context instances of a task
+  # (see docs/explanation/l2m_tabicl_prior.md).
+  l2m_tabicl_prior:
+    pretrain_script_name: "l2m"
+    pretrain_params:
+      ["task_prior=tabicl_v1", "sequence_length=250", "task_workers=4"]
+
   # Example: If you need a variant with specific parameters
   # pvae_custom:
   #   pretrain_script_name: "odin"

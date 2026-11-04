@@ -15,6 +15,7 @@ method_name_mapping:
   aaco: AACO
   aaco_nn: AACO(NN)
   l2m: L2M
+  l2m_tabicl_prior: L2M(TabICL prior)
   permutation: PT
   cae: CAE
   random_dummy: Random
@@ -33,6 +34,7 @@ method_policy_family_mapping:
   aaco: aaco
   aaco_nn: aaco
   l2m: l2m
+  l2m_tabicl_prior: l2m
   permutation: static
   cae: static
   random_dummy: dummy

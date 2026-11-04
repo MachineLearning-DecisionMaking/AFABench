@@ -11,6 +11,16 @@ walltime:
           datasets:
             miniboone_subset: 8
             metabric: 8
+        l2m_tabicl_prior:
+          # Not measured: upper bounds from the GH200 durations of l2m_official
+          # on miniboone_subset (10 features, 1000 instances per task), 5.2 to
+          # 5.9 hours for 50,000 steps. The cube's 20 features double the
+          # forward passes of a step; its tasks have 450 tokens per pass in
+          # the autoregressive layout, against 1,950, so a step costs less per
+          # pass. A step that did not shrink at all would take 2 x 5.9 = 11.8
+          # hours. Replace by the measured duration of the first run.
+          datasets:
+            cube: 12
     pretrain_model:
       pretrained_models:
         l2m:
@@ -18,6 +28,13 @@ walltime:
           # default (50,000 steps ran in about 3 hours on miniboone_subset).
           datasets:
             metabric: 8
+        l2m_tabicl_prior:
+          # Not measured: an upper bound from the 3.0 hours of l2m_official's
+          # pretraining on miniboone_subset (50,000 steps); the cube's 21
+          # forward passes per step against 11, with no saving from its
+          # shorter tasks, give 1.9 x 3.0 = 5.7 hours. See train_method.
+          datasets:
+            cube: 6
 
 # CPU nodes are x86_64 and GPU nodes aarch64 (GH200), so each allocation
 # names the venv of its nodes' architecture, which `uv run just build-venvs` builds and

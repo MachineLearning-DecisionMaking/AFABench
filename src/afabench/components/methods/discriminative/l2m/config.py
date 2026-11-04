@@ -7,12 +7,26 @@ from afabench.fit.contract import (
     store_contract_config,
 )
 
-#TODO: add datasets per better synth generation
-class FeatureSource(StrEnum):
-    """Where the features of L2M's tasks come from; config values are the names."""
 
-    real = "real"
-    synthetic = "synthetic"
+class TaskPrior(StrEnum):
+    """
+    The task prior an L2M fit stage draws its tasks from; values are names.
+
+    The pool priors draw a task's instances from a pretraining pool and
+    label them with upstream's random BNN. `tabicl_v1` generates features and
+    labels together, with no pool.
+    """
+
+    # The train split's features.
+    real_pool = "real_pool"
+    # Uniform draws on a box, with only the dataset's feature count.
+    synthetic_pool = "synthetic_pool"
+    # The TabICL v1 prior, with the dataset's feature and class counts.
+    tabicl_v1 = "tabicl_v1"
+
+    @property
+    def uses_pool(self) -> bool:
+        return self is not TaskPrior.tabicl_v1
 
 
 # `RealDataSampler.sample` always gives a task this many context instances
@@ -22,9 +36,11 @@ UPSTREAM_CONTEXT_SET_SIZE = 50
 
 def _check_task_shape(
     *,
+    task_prior: TaskPrior,
     sequence_length: int,
     pretraining_pool_size: int,
     n_validation_tasks: int,
+    task_workers: int,
 ) -> None:
     if sequence_length <= UPSTREAM_CONTEXT_SET_SIZE:
         msg = (
@@ -34,7 +50,7 @@ def _check_task_shape(
         raise ValueError(msg)
     # A task draws its instances from the pretraining pool without
     # replacement.
-    if pretraining_pool_size < sequence_length:
+    if task_prior.uses_pool and pretraining_pool_size < sequence_length:
         msg = (
             f"pretraining_pool_size={pretraining_pool_size} must be at "
             f"least sequence_length={sequence_length}"
@@ -42,6 +58,17 @@ def _check_task_shape(
         raise ValueError(msg)
     if n_validation_tasks < 1:
         msg = f"n_validation_tasks={n_validation_tasks} must be at least 1"
+        raise ValueError(msg)
+    if task_workers < 0:
+        msg = f"task_workers={task_workers} must not be negative"
+        raise ValueError(msg)
+    # Only the TabICL v1 prior is slow enough to generate ahead of use.
+    if task_workers and task_prior.uses_pool:
+        msg = (
+            f"task_workers={task_workers} has no effect with "
+            f"task_prior={task_prior.value}; only tabicl_v1 generates "
+            f"tasks in worker processes"
+        )
         raise ValueError(msg)
 
 
@@ -61,8 +88,9 @@ class L2MArchitectureConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class L2MPretrainingConfig(PretrainingContract):
-    # See `draw_feature_pool`.
-    feature_source: FeatureSource
+    task_prior: TaskPrior
+    # Processes generating tasks ahead of use; 0 generates them in the fit.
+    task_workers: int
     architecture: L2MArchitectureConfig
     # Tasks per step, and instances per task.
     batch_size: int
@@ -72,16 +100,18 @@ class L2MPretrainingConfig(PretrainingContract):
     warmup_steps: int
     checkpoint_interval: int
     n_validation_tasks: int
-    # Train-split instances whose features the task prior draws from.
+    # Train-split instances whose features a pool task prior draws from.
     pretraining_pool_size: int
     # bf16 autocast, as upstream's `Accelerator(mixed_precision="bf16")`.
     mixed_precision: bool
 
     def __post_init__(self) -> None:
         _check_task_shape(
+            task_prior=self.task_prior,
             sequence_length=self.sequence_length,
             pretraining_pool_size=self.pretraining_pool_size,
             n_validation_tasks=self.n_validation_tasks,
+            task_workers=self.task_workers,
         )
 
 
@@ -90,8 +120,9 @@ store_contract_config(name="pretrain_l2m", config_class=L2MPretrainingConfig)
 
 @dataclass(frozen=True, kw_only=True)
 class L2MTrainingConfig(TrainingContract):
-    # The pretrained model's feature source, see `draw_feature_pool`.
-    feature_source: FeatureSource
+    # The pretrained model's task prior, and its worker processes.
+    task_prior: TaskPrior
+    task_workers: int
     # Tasks per step, and instances per task.
     batch_size: int
     sequence_length: int
@@ -110,9 +141,11 @@ class L2MTrainingConfig(TrainingContract):
 
     def __post_init__(self) -> None:
         _check_task_shape(
+            task_prior=self.task_prior,
             sequence_length=self.sequence_length,
             pretraining_pool_size=self.pretraining_pool_size,
             n_validation_tasks=self.n_validation_tasks,
+            task_workers=self.task_workers,
         )
         if self.context_set_size < 1:
             msg = (

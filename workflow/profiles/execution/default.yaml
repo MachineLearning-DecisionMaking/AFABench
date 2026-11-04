@@ -33,3 +33,6 @@ execution:
     l2m:
       training: cuda
       evaluation: cuda
+    l2m_tabicl_prior:
+      training: cuda
+      evaluation: cuda

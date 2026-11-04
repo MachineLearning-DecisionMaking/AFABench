@@ -107,6 +107,7 @@ guides appear under each audience they serve, linking to one canonical page.
 - [Benchmark releases](explanation/benchmark_releases.md)
 - [Output snapshots](explanation/output_snapshots.md)
 - [Framework limitations](explanation/limitations.md)
+- [L2M trained on the TabICL v1 prior](explanation/l2m_tabicl_prior.md)
 - [What GDFS and DIME share, and where the port departs from upstream](explanation/gdfs_dime_shared_code.md)
 - Investigations behind ADRs:
   [training-contract duplication](explanation/training_contract_inventory.md),

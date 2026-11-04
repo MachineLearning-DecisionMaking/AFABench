@@ -4,6 +4,7 @@ line-length = 79
 exclude = [
   # Vendored third-party code, kept close to verbatim (ADR 0012)
   "src/afabench/components/methods/discriminative/l2m/upstream",
+  "src/afabench/components/methods/discriminative/l2m/tabicl_v1_prior",
 ]
 
 [lint]

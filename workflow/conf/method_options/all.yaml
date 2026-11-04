@@ -91,6 +91,21 @@ method_options:
     # policy serves every evaluation budget.
     train_hard_budget: {miniboone_subset: 7, metabric: 7}
     hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
+  # L2M trained only on the TabICL v1 prior with the cube's 20 features and
+  # 8 classes (docs/explanation/l2m_tabicl_prior.md): the model cannot
+  # evaluate on any other dataset, and a task's 200 query instances follow its
+  # 50 context instances. Both stages generate tasks in 4 worker processes.
+  l2m_tabicl_prior:
+    pretrained_model_name: "l2m_tabicl_prior"
+    train_script_name: "l2m"
+    method_specific_params:
+      ["task_prior=tabicl_v1", "sequence_length=250", "task_workers=4"]
+    eval_batch_size:
+      default: 128
+    # As l2m: one trained policy serves every evaluation budget, and the
+    # train hard budget must be below the cube's 20 selections.
+    train_hard_budget: {cube: 10}
+    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, metabric, miniboone, miniboone_subset, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
   cae:
     train_script_name: "cae"
     train_hard_budget: {cube_nonuniform_costs: 20}

@@ -26,8 +26,11 @@ def main(cfg: L2MTrainingConfig) -> None:
     cfg = limit(
         cfg,
         # Every task has 50 context instances, the sampler's own default.
-        sequence_length=64,
+        # The TabICL v1 prior rejects nearly every draw with 8 classes in
+        # fewer than about 100 instances.
+        sequence_length=64 if cfg.task_prior.uses_pool else 100,
         pretraining_pool_size=64,
+        task_workers=0,
         n_steps=2,
         checkpoint_interval=1,
         n_validation_tasks=2,

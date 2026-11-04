@@ -1,7 +1,8 @@
 """
 L2M training stage: upstream's `real_train_afa` on the fit contract.
 
-The pretrained `L2MModel` is loaded and trained with the vendored
+The pretrained `L2MModel` is loaded and trained, on tasks from the
+configured task prior (`TaskPrior`), with the vendored
 `afa_training_step` (upstream's `sequential` strategy): every step rolls out
 a trajectory of random acquisitions, and at each state the policy's
 straight-through Gumbel-softmax action is scored by the classifier's loss
@@ -37,14 +38,17 @@ from afabench.components.methods.discriminative.l2m.upstream.utils import (
 )
 from afabench.components.methods.discriminative.l2m.upstream_fit import (
     UpstreamAccelerator,
-    draw_feature_pool,
     fit_upstream,
     generate_validation_tasks,
-    make_sampler,
+    make_task_sampler,
+    training_batches,
     upstream_config,
 )
 from afabench.core.types import Features, Label
 from afabench.fit.inputs import FitInputs
+
+# The stage's own stream of seeded batches, apart from pretraining's.
+TRAINING_STREAM = 1
 
 
 def train_l2m(
@@ -69,15 +73,13 @@ def train_l2m(
             f"and {shapes[1]}"
         )
         raise ValueError(msg)
-    sampler = make_sampler(
-        draw_feature_pool(
-            train_dataset,
-            feature_source=cfg.feature_source,
-            size=cfg.pretraining_pool_size,
-            sequence_length=cfg.sequence_length,
-            seed=cfg.seed,
-        ),
-        label_dim=model.label_dim,
+    sampler = make_task_sampler(
+        train_dataset,
+        model,
+        task_prior=cfg.task_prior,
+        pool_size=cfg.pretraining_pool_size,
+        sequence_length=cfg.sequence_length,
+        seed=cfg.seed,
     )
     config = upstream_config(
         model,
@@ -111,13 +113,7 @@ def train_l2m(
     selector_fn = ConcreteSelector()
 
     def training_step() -> float:
-        batch = sampler.sample(
-            batch_size=cfg.batch_size,
-            max_num_points=cfg.sequence_length,
-            # Upstream annotates the device as a string.
-            device=str(device),
-            num_observed=model.n_features,
-        )
+        batch = next(batches)
         return float(
             afa_training_step(
                 config,
@@ -138,16 +134,27 @@ def train_l2m(
         )
         return float(loss)
 
-    fit_upstream(
-        model,
-        accelerator,
-        stage="train",
+    with training_batches(
+        sampler,
         n_steps=cfg.n_steps,
-        checkpoint_interval=cfg.checkpoint_interval,
-        training_step=training_step,
-        validation_loss=validation_loss,
-        metric_logger=metric_logger,
-    )
+        batch_size=cfg.batch_size,
+        sequence_length=cfg.sequence_length,
+        n_features=model.n_features,
+        seed=cfg.seed,
+        stream=TRAINING_STREAM,
+        device=device,
+        n_workers=cfg.task_workers,
+    ) as batches:
+        fit_upstream(
+            model,
+            accelerator,
+            stage="train",
+            n_steps=cfg.n_steps,
+            checkpoint_interval=cfg.checkpoint_interval,
+            training_step=training_step,
+            validation_loss=validation_loss,
+            metric_logger=metric_logger,
+        )
     context_features, context_labels = _draw_context_set(
         inputs.val_dataset().get_all_data(),
         n_features=model.n_features,

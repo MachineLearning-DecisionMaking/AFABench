@@ -21,8 +21,10 @@ defaults:
 # dataset_override/<dataset_key>.yaml applies the authors' dataset config.
 # The architecture comes from the pretrained model bundle.
 
-# The feature source of the pretrained model; see the pretraining config.
-feature_source: real
+# The pretrained model's task prior and its worker processes; see the
+# pretraining config.
+task_prior: real_pool
+task_workers: 0
 batch_size: 8 # batch_size_afa
 sequence_length: 1000 # num_points
 n_steps: 50000 # num_steps_afa
