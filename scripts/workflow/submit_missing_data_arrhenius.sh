@@ -6,7 +6,7 @@ usage() {
 usage: submit_missing_data_arrhenius.sh --profile NAME --cores N --mem-mb N \
        --time HH:MM:SS [--gpus N] [--gpu-workers N] [--device DEVICE] \
        [--mps] [--archive-dir DIR] [--remove-archived-source] \
-       [--job-name NAME] [--afterok JOBID] \
+       [--job-name NAME] [--afterok JOBID] [--afterany JOBID] \
        [--test-only] [-- SNAKEMAKE_ARGS...]
 
 Submits one allocation after checking the live association run-minute cap and
@@ -27,6 +27,7 @@ remove_archived_source=false
 device=""
 job_name=""
 afterok=""
+afterany=""
 test_only=false
 snakemake_args=()
 
@@ -44,6 +45,7 @@ while (($#)); do
         --device) device=${2:?}; shift 2 ;;
         --job-name) job_name=${2:?}; shift 2 ;;
         --afterok) afterok=${2:?}; shift 2 ;;
+        --afterany) afterany=${2:?}; shift 2 ;;
         --test-only) test_only=true; shift ;;
         --) shift; snakemake_args=("$@"); break ;;
         -h|--help) usage ;;
@@ -56,6 +58,7 @@ done
 [[ ${gpus} =~ ^[0-9]+$ ]] || usage
 [[ -z ${gpu_workers} || ${gpu_workers} =~ ^[0-9]+$ ]] || usage
 [[ -z ${afterok} || ${afterok} =~ ^[0-9]+$ ]] || usage
+[[ -z ${afterany} || ${afterany} =~ ^[0-9]+$ ]] || usage
 if ((gpus > 1)); then
     echo "only one physical GPU per allocation is supported" >&2
     exit 2
@@ -173,6 +176,7 @@ sbatch_args=(
 )
 ((gpus > 0)) && sbatch_args+=(--gpus="${gpus}")
 [[ -n ${afterok} ]] && sbatch_args+=(--dependency="afterok:${afterok}")
+[[ -n ${afterany} ]] && sbatch_args+=(--dependency="afterany:${afterany}")
 
 sbatch --test-only "${sbatch_args[@]}" "${runner[@]}"
 [[ ${test_only} == true ]] && exit 0
