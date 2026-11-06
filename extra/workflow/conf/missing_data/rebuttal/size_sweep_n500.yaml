@@ -1,0 +1,5 @@
+artifact_namespace: size_sweep_n500
+dataset_generation_params:
+  cube: &n
+    - dataset.kwargs.n_samples=500
+  cube_nm: *n

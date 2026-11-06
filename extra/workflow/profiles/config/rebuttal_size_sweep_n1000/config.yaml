@@ -1,0 +1,16 @@
+snakefile: extra/workflow/snakefiles/orchestration/missing_data.smk
+cores: 4
+
+configfile:
+  - extra/workflow/conf/eval_hard_budgets/all.yaml
+  - extra/workflow/conf/methods/all.yaml
+  - extra/workflow/conf/method_sets/all.yaml
+  - extra/workflow/conf/method_options/all.yaml
+  - extra/workflow/conf/pretrain_mappings/all.yaml
+  - extra/workflow/conf/soft_budget_params/all.yaml
+  - extra/workflow/conf/unmaskers/all.yaml
+  - extra/workflow/conf/classifier_names/all.yaml
+  - extra/workflow/conf/datasets/all.yaml
+  - extra/workflow/conf/missing_data/design.yaml
+  - extra/workflow/conf/missing_data/rebuttal/size_sweep.yaml
+  - extra/workflow/conf/missing_data/rebuttal/size_sweep_n1000.yaml

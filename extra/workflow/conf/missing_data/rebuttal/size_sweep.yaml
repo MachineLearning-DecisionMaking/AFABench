@@ -1,0 +1,24 @@
+classifier_scope: per_instance
+device: cuda
+smoke_test: false
+eval_dataset_split: val
+dataset_instance_indices: [0, 1, 2, 3, 4]
+datasets: [cube, cube_nm]
+eval_batch_size: 128
+restoration_batch_size: 1024
+eval_params:
+  - eval_only_n_samples=4096
+
+methods: [aaco, dime, gdfs, jafa, ol_with_mask, ol_full_state, odin_model_free]
+strategies: [restricted, pvae_label_conditioned, pvae_oracle]
+include_complete_data: true
+include_method_variants: true
+
+missingness:
+  mechanisms: [mcar]
+  probabilities: [0.7]
+
+missing_data_pretrain_reuse:
+  pvae:
+    complete: oracle_restoration_pvae
+    restricted: incomplete_restoration_pvae
