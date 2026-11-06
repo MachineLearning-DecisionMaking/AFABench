@@ -167,7 +167,7 @@ def recovery_table(figure: ModuleType) -> None:
         "recovery_shares.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Fraction of the missingness damage recovered by generative restoration, estimated as the least-squares slope through the origin of the restoration gain against the missingness damage over the eight datasets and the three missingness rates, as in \Cref{fig:law-grid}, with 95\% bootstrap intervals.}
+\caption{Fraction of the missingness damage recovered by generative restoration, with 95\% bootstrap intervals (slopes of \Cref{fig:law-grid}).}
 \label{tab:recovery-shares}
 {\footnotesize
 \begin{tabular}{l"""
@@ -245,7 +245,7 @@ def significance_table(instances: pd.DataFrame) -> None:
         "restoration_significance.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training, per method--dataset combination, with a paired $t$-test over the five dataset splits at $\alpha = 0.05$ (uncorrected). Damaged combinations have a missingness damage of at least $0.01$; the last column is the median fraction of the damage recovered over the damaged combinations.}
+\caption{Generative restoration against restricted training (paired $t$-test, $\alpha = 0.05$), over all and over damaged method--dataset combinations (damage at least $0.01$).}
 \label{tab:restoration-significance}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -291,7 +291,7 @@ def complete_instances_table(namespaces: list[str]) -> None:
         "complete_instances.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Expected number of complete training instances $n (1 - p)^d$ under MCAR, per dataset split.}
+\caption{Expected number of complete training instances $n (1 - p)^d$ under MCAR.}
 \label{tab:complete-instances}
 {\footnotesize
 \begin{tabular}{lccccc}
@@ -336,7 +336,7 @@ def mask_conditioning_table(scores: pd.DataFrame) -> None:
         "mask_conditioning.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Number of settings (mechanism, rate and dataset) in which the aliasing variant $(s)$ outperforms the filtering variant $(s,m)$.}
+\caption{Settings in which aliasing $(s)$ outperforms filtering $(s,m)$, over four mechanisms, three rates, and eight datasets.}
 \label{tab:mask-conditioning}
 {\footnotesize
 \begin{tabular}{lcc}
@@ -404,13 +404,14 @@ def approaches_table(scores: pd.DataFrame) -> None:
         "restoration_approaches.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, summed over the method--dataset combinations with a damage of at least $0.01$ for which every listed approach is available ("""
+\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, over damaged method--dataset combinations ("""
         + "; ".join(
             f"{name}: "
             + ", ".join(DATASET_LABELS_SHORT.get(d, d) for d in sorted(sets))
             for name, sets in used.items()
+            if sets
         )
-        + r"""). True completion trains on the complete training data and recovers the full damage by construction.}
+        + r""").}
 \label{tab:restoration-approaches}
 {\footnotesize
 \begin{tabular}{lcccc}
@@ -488,7 +489,7 @@ def predictor_table(scores: pd.DataFrame, view: pd.DataFrame) -> None:
         "predictor_ablation.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Mean missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete data, as in the main experiments, or on the same incomplete or restored training data as the policy. Damage is measured against complete-data training with the complete-data predictor and averaged over all method--dataset combinations; the recovered fractions are summed over the combinations with a damage of at least $0.01$ under both predictors.}
+\caption{Missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete or on incomplete training data.}
 \label{tab:predictor-ablation}
 {\footnotesize
 \setlength{\tabcolsep}{3pt}
