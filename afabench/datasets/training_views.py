@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, override
 
 import torch
+from sklearn.experimental import (  # noqa: F401
+    enable_iterative_imputer,  # pyright: ignore[reportUnusedImport]
+)
+from sklearn.impute import IterativeImputer, KNNImputer
 from torch.utils.data import Dataset
 
 from afabench.core.types import AFADataset, Features, Label
@@ -196,6 +200,61 @@ def mean_filled_training_views(
             feature_costs=view.get_feature_acquisition_costs(),
             source_dataset_class_name=view.source_dataset_class_name,
             strategy="mean_fill",
+        )
+
+    return fill(train_view), fill(val_view)
+
+
+KNN_MAX_DONORS = 10_000
+
+
+def sklearn_filled_training_views(
+    train_view: TrainingDatasetView,
+    val_view: TrainingDatasetView,
+    *,
+    strategy: str,
+    seed: int,
+) -> tuple[TrainingDatasetView, TrainingDatasetView]:
+    if strategy == "mice_fill":
+        imputer = IterativeImputer(
+            sample_posterior=True, max_iter=10, random_state=seed
+        )
+    elif strategy == "knn_fill":
+        imputer = KNNImputer(n_neighbors=5)
+    else:
+        msg = f"Unsupported imputer strategy: {strategy}"
+        raise ValueError(msg)
+
+    def as_nan(view: TrainingDatasetView) -> torch.Tensor:
+        flat = view.features.flatten(start_dim=1).double().clone()
+        flat[~view.source_availability.flatten(start_dim=1)] = float("nan")
+        return flat
+
+    train_nan = as_nan(train_view)
+    if train_view.source_availability.flatten(start_dim=1).sum(0).eq(0).any():
+        msg = "Cannot impute a feature with no available training values."
+        raise ValueError(msg)
+    donors = train_nan
+    if strategy == "knn_fill" and len(donors) > KNN_MAX_DONORS:
+        generator = torch.Generator().manual_seed(seed)
+        donors = donors[
+            torch.randperm(len(donors), generator=generator)[:KNN_MAX_DONORS]
+        ]
+    imputer.fit(donors.numpy())
+
+    def fill(view: TrainingDatasetView) -> TrainingDatasetView:
+        imputed = torch.from_numpy(imputer.transform(as_nan(view).numpy()))
+        imputed = imputed.to(view.features.dtype).reshape(view.features.shape)
+        available = view.source_availability
+        imputed[available] = view.features[available]
+        return TrainingDatasetView(
+            features=imputed,
+            labels=view.labels,
+            source_availability=available,
+            selection_availability=torch.ones_like(available),
+            feature_costs=view.get_feature_acquisition_costs(),
+            source_dataset_class_name=view.source_dataset_class_name,
+            strategy=strategy,
         )
 
     return fill(train_view), fill(val_view)

@@ -55,6 +55,8 @@ STRATEGY_ORDER = [
     "pvae_oracle",
     "true_completion",
     "zero_fill",
+    "mice_fill",
+    "knn_fill",
 ]
 STRATEGY_DISPLAY = {
     "complete": "Complete data",
@@ -66,6 +68,8 @@ STRATEGY_DISPLAY = {
     "pvae_oracle": "PVAE (oracle)",
     "true_completion": "True completion",
     "zero_fill": "Zero fill",
+    "mice_fill": "MICE",
+    "knn_fill": "kNN",
 }
 # Distinct markers distinguish policy-state variants within each family.
 METHOD_SHAPES = {

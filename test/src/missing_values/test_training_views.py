@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 
 from afabench.core.bundle_system.bundle import load_bundle, save_bundle
@@ -9,6 +10,7 @@ from afabench.datasets.training_views import (
     mean_filled_training_views,
     pvae_restored_training_view,
     restricted_training_view,
+    sklearn_filled_training_views,
     true_value_training_view,
     zero_filled_training_view,
 )
@@ -99,3 +101,30 @@ def test_training_view_bundle_roundtrip(tmp_path: Path) -> None:
         view.selection_availability,
     )
     assert manifest["metadata"]["strategy"] == "restricted"
+
+
+@pytest.mark.parametrize("strategy", ["mice_fill", "knn_fill"])
+def test_sklearn_fill_keeps_factual_values(strategy: str) -> None:
+    train_dataset = _dataset(1)
+    val_dataset = _dataset(2)
+    train_available = _availability(train_dataset)
+    val_available = _availability(val_dataset)
+
+    train_view, val_view = sklearn_filled_training_views(
+        restricted_training_view(train_dataset, train_available),
+        restricted_training_view(val_dataset, val_available),
+        strategy=strategy,
+        seed=0,
+    )
+
+    for view, dataset, available in (
+        (train_view, train_dataset, train_available),
+        (val_view, val_dataset, val_available),
+    ):
+        assert view.strategy == strategy
+        assert view.selection_availability.all()
+        assert torch.equal(view.source_availability, available)
+        assert torch.equal(
+            view.features[available], dataset.features[available]
+        )
+        assert torch.isfinite(view.features).all()

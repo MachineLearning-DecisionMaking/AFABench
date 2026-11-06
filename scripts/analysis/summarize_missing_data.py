@@ -29,6 +29,8 @@ _STRATEGY_DISPLAY = {
     "restricted": "Restricted-action training",
     "mean_fill": "Mean completion",
     "zero_fill": "Zero fill",
+    "mice_fill": "MICE",
+    "knn_fill": "kNN",
     "pvae_label_conditioned": "Generative restoration",
     "pvae_label_free": "PVAE (label-free)",
     "pvae_stepwise": "Stepwise (PVAE)",

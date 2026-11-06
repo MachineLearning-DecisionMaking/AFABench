@@ -12,6 +12,7 @@ from afabench.datasets.training_views import (
     TrainingDatasetView,
     mean_filled_training_views,
     restricted_training_view,
+    sklearn_filled_training_views,
     true_value_training_view,
     zero_filled_training_view,
 )
@@ -94,6 +95,13 @@ def materialize_training_views(
         return (
             true_value_training_view(train_dataset, train_restricted),
             true_value_training_view(val_dataset, val_restricted),
+        )
+    if cfg.strategy in {"mice_fill", "knn_fill"}:
+        return sklearn_filled_training_views(
+            train_restricted,
+            val_restricted,
+            strategy=cfg.strategy,
+            seed=cfg.seed,
         )
     if cfg.strategy == "zero_fill":
         return (
