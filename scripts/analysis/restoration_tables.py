@@ -56,6 +56,7 @@ APPROACHES = {
     "mean_fill": "Mean-Fill",
     "knn_fill": "kNN",
     "mice_fill": "MICE",
+    "mice_label_fill": "MICE, Label-Conditioned",
     "pvae_label_free": "PVAE, Label-Free",
     "pvae_label_conditioned": "PVAE, Label-Conditioned",
     "pvae_multi_draw": "PVAE, Five Samples",
@@ -243,15 +244,15 @@ def significance_table(instances: pd.DataFrame) -> None:
         "restoration_significance.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training, per method--dataset pair, with a paired $t$-test over the five dataset splits at $\alpha = 0.05$ (uncorrected). Damaged pairs have a missingness damage of at least $0.01$; the last column is the median fraction of the damage recovered over the damaged pairs.}
+\caption{Generative restoration against restricted training, per method--dataset combination, with a paired $t$-test over the five dataset splits at $\alpha = 0.05$ (uncorrected). Damaged combinations have a missingness damage of at least $0.01$; the last column is the median fraction of the damage recovered over the damaged combinations.}
 \label{tab:restoration-significance}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{lcccccccccc}
 \toprule
-& & \multicolumn{3}{c}{All Pairs} & \multicolumn{5}{c}{Damaged Pairs} \\
+& & \multicolumn{3}{c}{All Combinations} & \multicolumn{5}{c}{Damaged Combinations} \\
 \cmidrule(lr){3-5} \cmidrule(lr){6-10}
-Mechanism & $p$ & Better & Worse & n.s. & Pairs & Better & Worse & n.s. & Recovered \\
+Mechanism & $p$ & Better & Worse & n.s. & Comb. & Better & Worse & n.s. & Recovered \\
 \midrule
 """
         + "\n".join(rows)
@@ -395,14 +396,14 @@ def approaches_table(scores: pd.DataFrame) -> None:
         "restoration_approaches.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, summed over the method--dataset pairs with a damage of at least $0.01$ for which every listed approach is available. True completion trains on the complete training data and recovers the full damage by construction.}
+\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, summed over the method--dataset combinations with a damage of at least $0.01$ for which every listed approach is available. True completion trains on the complete training data and recovers the full damage by construction.}
 \label{tab:restoration-approaches}
 {\footnotesize
 \begin{tabular}{lcccc}
 \toprule
 & \multicolumn{2}{c}{Synthetic} & \multicolumn{2}{c}{Real-World} \\
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
-Restoration Approach & Recovered ($\uparrow$) & Pairs & Recovered ($\uparrow$) & Pairs \\
+Restoration Approach & Recovered ($\uparrow$) & Comb. & Recovered ($\uparrow$) & Comb. \\
 \midrule
 """
         + "\n".join(rows)
@@ -467,7 +468,7 @@ def predictor_table(paper: pd.DataFrame, view: pd.DataFrame) -> None:
         "predictor_ablation.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Mean missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete data, as in the main experiments, or on the same incomplete or restored training data as the policy. Damage is measured against complete-data training with the complete-data predictor; the recovered fractions are summed over the method--dataset pairs with a damage of at least $0.01$.}
+\caption{Mean missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete data, as in the main experiments, or on the same incomplete or restored training data as the policy. Damage is measured against complete-data training with the complete-data predictor; the recovered fractions are summed over the method--dataset combinations with a damage of at least $0.01$.}
 \label{tab:predictor-ablation}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -504,6 +505,9 @@ def main() -> None:
             "sklearn_imputers_core_group",
             "sklearn_imputers_induced_real",
             "sklearn_imputers_induced_nonuniform",
+            "mice_label_core_group",
+            "mice_label_induced_real",
+            "mice_label_induced_nonuniform",
             "multi_draw_core_group",
             "multi_draw_induced_real",
             "multi_draw_induced_nonuniform",

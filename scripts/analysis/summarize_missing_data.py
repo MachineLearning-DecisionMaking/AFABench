@@ -30,6 +30,7 @@ _STRATEGY_DISPLAY = {
     "mean_fill": "Mean completion",
     "zero_fill": "Zero fill",
     "mice_fill": "MICE",
+    "mice_label_fill": "MICE, Label-Conditioned",
     "knn_fill": "kNN",
     "pvae_label_conditioned": "Generative restoration",
     "pvae_label_free": "PVAE (label-free)",

@@ -103,7 +103,9 @@ def test_training_view_bundle_roundtrip(tmp_path: Path) -> None:
     assert manifest["metadata"]["strategy"] == "restricted"
 
 
-@pytest.mark.parametrize("strategy", ["mice_fill", "knn_fill"])
+@pytest.mark.parametrize(
+    "strategy", ["mice_fill", "mice_label_fill", "knn_fill"]
+)
 def test_sklearn_fill_keeps_factual_values(strategy: str) -> None:
     train_dataset = _dataset(1)
     val_dataset = _dataset(2)

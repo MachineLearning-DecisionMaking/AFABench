@@ -96,7 +96,7 @@ def materialize_training_views(
             true_value_training_view(train_dataset, train_restricted),
             true_value_training_view(val_dataset, val_restricted),
         )
-    if cfg.strategy in {"mice_fill", "knn_fill"}:
+    if cfg.strategy in {"mice_fill", "mice_label_fill", "knn_fill"}:
         return sklearn_filled_training_views(
             train_restricted,
             val_restricted,

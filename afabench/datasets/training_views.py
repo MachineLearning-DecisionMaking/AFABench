@@ -215,7 +215,7 @@ def sklearn_filled_training_views(
     strategy: str,
     seed: int,
 ) -> tuple[TrainingDatasetView, TrainingDatasetView]:
-    if strategy == "mice_fill":
+    if strategy in {"mice_fill", "mice_label_fill"}:
         imputer = IterativeImputer(
             sample_posterior=True, max_iter=10, random_state=seed
         )
@@ -225,9 +225,16 @@ def sklearn_filled_training_views(
         msg = f"Unsupported imputer strategy: {strategy}"
         raise ValueError(msg)
 
+    use_label = strategy == "mice_label_fill"
+    n_features = train_view.features[0].numel()
+
     def as_nan(view: TrainingDatasetView) -> torch.Tensor:
         flat = view.features.flatten(start_dim=1).double().clone()
         flat[~view.source_availability.flatten(start_dim=1)] = float("nan")
+        if use_label:
+            flat = torch.cat(
+                [flat, view.labels.flatten(start_dim=1).double()], 1
+            )
         return flat
 
     train_nan = as_nan(train_view)
@@ -244,7 +251,11 @@ def sklearn_filled_training_views(
 
     def fill(view: TrainingDatasetView) -> TrainingDatasetView:
         imputed = torch.from_numpy(imputer.transform(as_nan(view).numpy()))
-        imputed = imputed.to(view.features.dtype).reshape(view.features.shape)
+        imputed = (
+            imputed[:, :n_features]
+            .to(view.features.dtype)
+            .reshape(view.features.shape)
+        )
         available = view.source_availability
         imputed[available] = view.features[available]
         return TrainingDatasetView(

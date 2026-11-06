@@ -57,6 +57,7 @@ STRATEGY_ORDER = [
     "true_completion",
     "zero_fill",
     "mice_fill",
+    "mice_label_fill",
     "knn_fill",
 ]
 STRATEGY_DISPLAY = {
@@ -71,6 +72,7 @@ STRATEGY_DISPLAY = {
     "true_completion": "True completion",
     "zero_fill": "Zero fill",
     "mice_fill": "MICE",
+    "mice_label_fill": "MICE, Label-Conditioned",
     "knn_fill": "kNN",
 }
 # Distinct markers distinguish policy-state variants within each family.
