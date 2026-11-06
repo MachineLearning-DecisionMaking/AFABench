@@ -18,7 +18,7 @@ rule generate_missing_data_dataset:
     output:
         [
             directory(
-                f"{ROOT}/datasets/{NAMESPACE}/{{dataset}}/{instance}/{split}.bundle"
+                f"{ROOT}/datasets/{DATA_NAMESPACE}/{{dataset}}/{instance}/{split}.bundle"
             )
             for instance in INSTANCES
             for split in ["train", "val", "test"]
@@ -28,7 +28,7 @@ rule generate_missing_data_dataset:
     params:
         instances="[" + ",".join(str(value) for value in INSTANCES) + "]",
         seeds="[" + ",".join(str(value) for value in INSTANCES) + "]",
-        save_path=lambda wc: f"{ROOT}/datasets/{NAMESPACE}/{wc.dataset}",
+        save_path=lambda wc: f"{ROOT}/datasets/{DATA_NAMESPACE}/{wc.dataset}",
         extra=lambda wc: runtime_params(DATASET_GENERATION_PARAMS, wc.dataset),
     shell:
         """
@@ -117,18 +117,49 @@ rule train_missing_data_method_classifier:
         """
 
 
+rule train_missing_data_view_classifier:
+    wildcard_constraints:
+        strategy=r"(?!complete$)[a-z_]+",
+    input:
+        train=lambda wc: training_view(wc, "train"),
+        val=lambda wc: training_view(wc, "val"),
+    output:
+        directory(VIEW_CLASSIFIER_OUTPUT),
+    benchmark:
+        f"{BENCHMARK_ROOT}/train_view_classifier/dataset-{{dataset}}/"
+        "mechanism-{mechanism}+p-{p}/instance-{instance}/{strategy}.tsv"
+    resources:
+        gpu=lambda wc: gpu_for_device(dataset_device(wc.dataset)),
+    params:
+        script=lambda wc: classifier_script_name(wc.dataset),
+        unmasker=lambda wc: UNMASKERS[wc.dataset],
+        device=lambda wc: dataset_device(wc.dataset),
+        extra=lambda wc: classifier_script_params(wc.dataset),
+    shell:
+        """
+        python scripts/train_classifier/{params.script}.py \
+            train_dataset_path={input.train} val_dataset_path={input.val} \
+            save_path={output} components/initializers@initializer={INITIALIZER} \
+            components/unmaskers@unmasker={params.unmasker} \
+            device={params.device} seed={wildcards.instance} \
+            use_wandb={USE_WANDB} smoke_test={SMOKE_TEST_STR} \
+            experiment@_global_={wildcards.dataset} {params.extra} \
+            {HYDRA_WORKFLOW_OVERRIDES}
+        """
+
+
 rule materialize_missing_training_view:
     input:
         train=lambda wc: raw_dataset(wc.dataset, wc.instance, "train"),
         val=lambda wc: raw_dataset(wc.dataset, wc.instance, "val"),
     output:
         train=directory(
-            f"{ROOT}/views/base/{NAMESPACE}/dataset-{{dataset}}/"
+            f"{ROOT}/views/base/{DATA_NAMESPACE}/dataset-{{dataset}}/"
             "mechanism-{mechanism}+p-{p}/instance-{instance}/"
             "{strategy}/train.bundle"
         ),
         val=directory(
-            f"{ROOT}/views/base/{NAMESPACE}/dataset-{{dataset}}/"
+            f"{ROOT}/views/base/{DATA_NAMESPACE}/dataset-{{dataset}}/"
             "mechanism-{mechanism}+p-{p}/instance-{instance}/"
             "{strategy}/val.bundle"
         ),
@@ -166,7 +197,7 @@ rule pretrain_incomplete_restoration_pvae:
         classifier=lambda wc: classifier_path(wc.dataset, wc.instance),
     output:
         directory(
-            f"{ROOT}/restoration_pvae/{NAMESPACE}/incomplete/"
+            f"{ROOT}/restoration_pvae/{DATA_NAMESPACE}/incomplete/"
             "dataset-{dataset}/mechanism-{mechanism}+p-{p}/"
             "instance-{instance}/model.bundle"
         ),
@@ -205,7 +236,7 @@ rule pretrain_oracle_restoration_pvae:
         classifier=lambda wc: classifier_path(wc.dataset, wc.instance),
     output:
         directory(
-            f"{ROOT}/restoration_pvae/{NAMESPACE}/oracle/"
+            f"{ROOT}/restoration_pvae/{DATA_NAMESPACE}/oracle/"
             "dataset-{dataset}/instance-{instance}/model.bundle"
         ),
     benchmark:
@@ -261,12 +292,12 @@ rule restore_missing_training_view:
         reference_val=lambda wc: raw_dataset(wc.dataset, wc.instance, "val"),
     output:
         train=directory(
-            f"{ROOT}/views/restored/{NAMESPACE}/dataset-{{dataset}}/"
+            f"{ROOT}/views/restored/{DATA_NAMESPACE}/dataset-{{dataset}}/"
             "mechanism-{mechanism}+p-{p}/instance-{instance}/"
             "{strategy}/train.bundle"
         ),
         val=directory(
-            f"{ROOT}/views/restored/{NAMESPACE}/dataset-{{dataset}}/"
+            f"{ROOT}/views/restored/{DATA_NAMESPACE}/dataset-{{dataset}}/"
             "mechanism-{mechanism}+p-{p}/instance-{instance}/"
             "{strategy}/val.bundle"
         ),
@@ -318,7 +349,7 @@ rule pretrain_missing_data_method:
     input:
         train=lambda wc: training_view(wc, "train"),
         val=lambda wc: training_view(wc, "val"),
-        classifier=lambda wc: classifier_path(wc.dataset, wc.instance),
+        classifier=policy_classifier,
     output:
         directory(
             f"{ROOT}/pretrained/{NAMESPACE}/{{pretrain_key}}/"
@@ -397,7 +428,7 @@ rule train_missing_data_method_with_pretraining:
         val=lambda wc: training_view(wc, "val"),
         pretrained=method_pretrain,
         stepwise_pvae=stepwise_pvae_input,
-        classifier=lambda wc: classifier_path(wc.dataset, wc.instance),
+        classifier=policy_classifier,
     output:
         directory(
             f"{ROOT}/trained/{NAMESPACE}/{{method}}/dataset-{{dataset}}/"
@@ -439,9 +470,7 @@ rule train_missing_data_method_without_pretraining:
     input:
         train=lambda wc: training_view(wc, "train"),
         val=lambda wc: training_view(wc, "val"),
-        classifier=lambda wc: classifier_path(
-            wc.dataset, wc.instance, wc.method
-        ),
+        classifier=lambda wc: policy_classifier(wc, wc.method),
         stepwise_pvae=stepwise_pvae_input,
     output:
         directory(
@@ -498,9 +527,7 @@ rule eval_missing_data_method:
         dataset=lambda wc: raw_dataset(wc.dataset, wc.instance, EVAL_SPLIT),
         method=trained_method_input,
         reuse_guard=policy_reuse_guard,
-        classifier=lambda wc: classifier_path(
-            wc.dataset, wc.instance, wc.method
-        ),
+        classifier=lambda wc: policy_classifier(wc, wc.method),
     output:
         f"{ROOT}/eval/{EVAL_SPLIT}/{NAMESPACE}/dataset-{{dataset}}/"
         "method-{method}+mechanism-{mechanism}+p-{p}+"
@@ -556,7 +583,7 @@ rule summarize_missing_data:
         restoration=f"{SUMMARY_DIR}/restoration_rmse.csv",
     params:
         root=f"{ROOT}/eval/{EVAL_SPLIT}/{NAMESPACE}",
-        restored=f"{ROOT}/views/restored/{NAMESPACE}",
+        restored=f"{ROOT}/views/restored/{DATA_NAMESPACE}",
         variants=" ".join(
             f"--base-method {name}={spec.base_method}"
             for name, spec in METHOD_SPECS.items()

@@ -26,6 +26,7 @@ from afabench.core.utils import (
     initialize_wandb_run,
     set_seed,
 )
+from afabench.datasets.training_views import TrainingDatasetView
 from afabench.training.supervised_learning import lightning_root
 from afabench.training.tensor_batches import (
     TensorBatchDataset,
@@ -38,6 +39,22 @@ if TYPE_CHECKING:
     from afabench.core.types import AFADataset, Features, Label
 
 log = logging.getLogger(__name__)
+
+
+def _batch_tensors(
+    dataset: "AFADataset",
+    features: torch.Tensor,
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, ...]:
+    flat = features.flatten(start_dim=1)
+    if not isinstance(dataset, TrainingDatasetView):
+        return flat, labels
+    availability = dataset.selection_availability.flatten(start_dim=1)
+    log.info(
+        f"Training on a view: {availability.float().mean().item():.3f} of "
+        "feature values are selectable."
+    )
+    return flat, labels, availability
 
 
 def _lightning_log_dir(save_path: str) -> Path:
@@ -92,7 +109,9 @@ def main(cfg: TrainMaskedMLPClassifierConfig) -> None:
             cast(
                 "object",
                 TensorBatchDataset(
-                    train_features.flatten(start_dim=1), train_labels
+                    *_batch_tensors(
+                        train_dataset, train_features, train_labels
+                    )
                 ),
             ),
         ),
@@ -101,7 +120,7 @@ def main(cfg: TrainMaskedMLPClassifierConfig) -> None:
             cast(
                 "object",
                 TensorBatchDataset(
-                    val_features.flatten(start_dim=1), val_labels
+                    *_batch_tensors(val_dataset, val_features, val_labels)
                 ),
             ),
         ),

@@ -1,6 +1,3 @@
-# Rebuttal E2b: imputation baselines for GDFS, JAFA and ODIN at MCAR p = 0.7.
-# Runs in place in the v2 namespaces so the new cells share datasets,
-# classifiers, base views and restoration PVAEs with the paper's cells.
 methods: [gdfs, jafa, odin_model_free]
 strategies:
   - restricted

@@ -36,6 +36,10 @@ if runtime_device := os.environ.get("AFABENCH_DEVICE"):
 _config = load_config(config)
 
 NAMESPACE = str(config["artifact_namespace"])
+DATA_NAMESPACE = str(config.get("upstream_namespace", NAMESPACE))
+CLASSIFIER_SOURCE = str(config.get("classifier_source", "complete"))
+if CLASSIFIER_SOURCE not in {"complete", "view"}:
+    raise ValueError("classifier_source must be 'complete' or 'view'")
 INSTANCES = [int(value) for value in _config["DATASET_INSTANCE_INDICES"]]
 if not INSTANCES:
     raise ValueError("dataset_instance_indices must not be empty")
@@ -231,25 +235,43 @@ def classifier_path(dataset, instance, method=None):
         base_method = METHOD_SPECS[method].base_method
         if base_method in METHOD_CLASSIFIER_SCRIPT_NAMES:
             return (
-                f"{ROOT}/classifier/{NAMESPACE}/"
+                f"{ROOT}/classifier/{DATA_NAMESPACE}/"
                 f"method-{base_method}+dataset-{dataset}{instance_suffix}"
             )
     return (
-        f"{ROOT}/classifier/{NAMESPACE}/dataset-{dataset}{instance_suffix}"
+        f"{ROOT}/classifier/{DATA_NAMESPACE}/dataset-{dataset}{instance_suffix}"
     )
 
 
+VIEW_CLASSIFIER_OUTPUT = (
+    f"{ROOT}/classifier/{NAMESPACE}/view/dataset-{{dataset}}/"
+    "mechanism-{mechanism}+p-{p}/instance-{instance}/{strategy}.bundle"
+)
+
+
+def policy_classifier(wildcards, method=None):
+    if CLASSIFIER_SOURCE == "view" and wildcards.strategy != "complete":
+        return VIEW_CLASSIFIER_OUTPUT.format(
+            dataset=wildcards.dataset,
+            mechanism=wildcards.mechanism,
+            p=wildcards.p,
+            instance=wildcards.instance,
+            strategy=wildcards.strategy,
+        )
+    return classifier_path(wildcards.dataset, wildcards.instance, method)
+
+
 CLASSIFIER_OUTPUT = (
-    f"{ROOT}/classifier/{NAMESPACE}/dataset-{{dataset}}/"
+    f"{ROOT}/classifier/{DATA_NAMESPACE}/dataset-{{dataset}}/"
     "instance-{instance}.bundle"
     if CLASSIFIER_SCOPE == "per_instance"
-    else f"{ROOT}/classifier/{NAMESPACE}/dataset-{{dataset}}.bundle"
+    else f"{ROOT}/classifier/{DATA_NAMESPACE}/dataset-{{dataset}}.bundle"
 )
 METHOD_CLASSIFIER_OUTPUT = (
-    f"{ROOT}/classifier/{NAMESPACE}/"
+    f"{ROOT}/classifier/{DATA_NAMESPACE}/"
     "method-{base_method}+dataset-{dataset}/instance-{instance}.bundle"
     if CLASSIFIER_SCOPE == "per_instance"
-    else f"{ROOT}/classifier/{NAMESPACE}/"
+    else f"{ROOT}/classifier/{DATA_NAMESPACE}/"
     "method-{base_method}+dataset-{dataset}.bundle"
 )
 CLASSIFIER_BENCHMARK = (
@@ -269,13 +291,13 @@ METHOD_CLASSIFIER_BENCHMARK = (
 
 def raw_dataset(dataset, instance, split):
     return (
-        f"{ROOT}/datasets/{NAMESPACE}/{dataset}/{instance}/{split}.bundle"
+        f"{ROOT}/datasets/{DATA_NAMESPACE}/{dataset}/{instance}/{split}.bundle"
     )
 
 
 def base_view(dataset, mechanism, probability, instance, strategy, split):
     return (
-        f"{ROOT}/views/base/{NAMESPACE}/dataset-{dataset}/"
+        f"{ROOT}/views/base/{DATA_NAMESPACE}/dataset-{dataset}/"
         f"mechanism-{mechanism}+p-{probability}/instance-{instance}/"
         f"{strategy}/{split}.bundle"
     )
@@ -285,7 +307,7 @@ def restored_view(
     dataset, mechanism, probability, instance, strategy, split
 ):
     return (
-        f"{ROOT}/views/restored/{NAMESPACE}/dataset-{dataset}/"
+        f"{ROOT}/views/restored/{DATA_NAMESPACE}/dataset-{dataset}/"
         f"mechanism-{mechanism}+p-{probability}/instance-{instance}/"
         f"{strategy}/{split}.bundle"
     )
@@ -324,7 +346,7 @@ def training_view(wildcards, split):
 
 def incomplete_pvae(dataset, mechanism, probability, instance):
     return (
-        f"{ROOT}/restoration_pvae/{NAMESPACE}/incomplete/dataset-{dataset}/"
+        f"{ROOT}/restoration_pvae/{DATA_NAMESPACE}/incomplete/dataset-{dataset}/"
         f"mechanism-{mechanism}+p-{probability}/instance-{instance}/"
         "model.bundle"
     )
@@ -332,7 +354,7 @@ def incomplete_pvae(dataset, mechanism, probability, instance):
 
 def oracle_pvae(dataset, instance):
     return (
-        f"{ROOT}/restoration_pvae/{NAMESPACE}/oracle/dataset-{dataset}/"
+        f"{ROOT}/restoration_pvae/{DATA_NAMESPACE}/oracle/dataset-{dataset}/"
         f"instance-{instance}/model.bundle"
     )
 

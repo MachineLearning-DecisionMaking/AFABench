@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     )
 
 
+def _availability(batch: tuple[Tensor, ...]) -> Tensor | None:
+    return batch[2].bool() if len(batch) > 2 else None
+
+
 @final
 class LitMaskedMLPClassifier(pl.LightningModule):
     """A lit module for a MaskedMLPClassifier that takes masked features and feature masks as input."""
@@ -91,10 +95,11 @@ class LitMaskedMLPClassifier(pl.LightningModule):
 
     @override
     def training_step(
-        self, batch: tuple[Tensor, Tensor], batch_idx: int
+        self, batch: tuple[Tensor, ...], batch_idx: int
     ) -> torch.Tensor:
         features: Features = batch[0]
         label: Label = batch[1]
+        availability = _availability(batch)
 
         masking_probability = self.min_masking_probability + torch.rand(
             1
@@ -106,6 +111,9 @@ class LitMaskedMLPClassifier(pl.LightningModule):
         masked_features, feature_mask, _ = mask_data(
             features, p=masking_probability
         )
+        if availability is not None:
+            feature_mask &= availability
+            masked_features = features * feature_mask.float()
 
         logits = self(masked_features, feature_mask)
         loss = F.cross_entropy(
@@ -131,15 +139,18 @@ class LitMaskedMLPClassifier(pl.LightningModule):
 
     @override
     def validation_step(
-        self, batch: tuple[Tensor, Tensor], batch_idx: int
+        self, batch: tuple[Tensor, ...], batch_idx: int
     ) -> None:
-        feature_values, y = batch
+        feature_values, y = batch[0], batch[1]
+        availability = _availability(batch)
 
         # Mask features with minimum probability -> see many features (observations)
         feature_mask_many_observations = (
             torch.rand(feature_values.shape, device=feature_values.device)
             > self.min_masking_probability
         )
+        if availability is not None:
+            feature_mask_many_observations &= availability
         feature_values_many_observations = feature_values.clone()
         feature_values_many_observations[
             feature_mask_many_observations == 0
@@ -155,6 +166,8 @@ class LitMaskedMLPClassifier(pl.LightningModule):
             torch.rand(feature_values.shape, device=feature_values.device)
             > self.max_masking_probability
         )
+        if availability is not None:
+            feature_mask_few_observations &= availability
         feature_values_few_observations = feature_values.clone()
         feature_values_few_observations[feature_mask_few_observations == 0] = 0
         loss_few_observations, acc_few_observations = self._get_loss_and_acc(
