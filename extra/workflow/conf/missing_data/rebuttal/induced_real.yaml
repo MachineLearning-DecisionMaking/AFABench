@@ -1,0 +1,18 @@
+artifact_namespace: induced_real_missingness_v2
+classifier_scope: per_instance
+device: cuda
+smoke_test: false
+eval_dataset_split: val
+dataset_instance_indices: [0, 1, 2, 3, 4]
+datasets: [actg, diabetes, nhanes_mortality, miniboone]
+dataset_generation_params:
+  nhanes_mortality: &fixed_test
+    - fixed_test_seed=100
+    - stratify=true
+  actg: *fixed_test
+  diabetes: *fixed_test
+  miniboone: *fixed_test
+eval_batch_size: 128
+restoration_batch_size: 1024
+eval_params:
+  - eval_only_n_samples=4096

@@ -1,0 +1,11 @@
+artifact_namespace: induced_nonuniform_missingness_v2
+classifier_scope: per_instance
+device: cuda
+smoke_test: false
+eval_dataset_split: val
+dataset_instance_indices: [0, 1, 2, 3, 4]
+datasets: [cube_nonuniform_costs, heart_disease]
+eval_batch_size: 128
+restoration_batch_size: 1024
+eval_params:
+  - eval_only_n_samples=4096
