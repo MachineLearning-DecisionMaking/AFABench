@@ -243,15 +243,15 @@ def significance_table(instances: pd.DataFrame) -> None:
         "restoration_significance.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training, per method--dataset cell, with a paired $t$-test over the five dataset splits at $\alpha = 0.05$ (uncorrected). Damaged cells have a missingness damage of at least $0.01$; the last column is the median fraction of the damage recovered over the damaged cells.}
+\caption{Generative restoration against restricted training, per method--dataset pair, with a paired $t$-test over the five dataset splits at $\alpha = 0.05$ (uncorrected). Damaged pairs have a missingness damage of at least $0.01$; the last column is the median fraction of the damage recovered over the damaged pairs.}
 \label{tab:restoration-significance}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{lcccccccccc}
 \toprule
-& & \multicolumn{3}{c}{All Cells} & \multicolumn{5}{c}{Damaged Cells} \\
+& & \multicolumn{3}{c}{All Pairs} & \multicolumn{5}{c}{Damaged Pairs} \\
 \cmidrule(lr){3-5} \cmidrule(lr){6-10}
-Mechanism & $p$ & Better & Worse & n.s. & Cells & Better & Worse & n.s. & Recovered \\
+Mechanism & $p$ & Better & Worse & n.s. & Pairs & Better & Worse & n.s. & Recovered \\
 \midrule
 """
         + "\n".join(rows)
@@ -395,14 +395,87 @@ def approaches_table(scores: pd.DataFrame) -> None:
         "restoration_approaches.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, summed over the method--dataset cells with a damage of at least $0.01$ for which every listed approach is available. True completion trains on the complete training data and recovers the full damage by construction.}
+\caption{Fraction of the missingness damage recovered by each restoration approach under MCAR at $p = 0.7$, summed over the method--dataset pairs with a damage of at least $0.01$ for which every listed approach is available. True completion trains on the complete training data and recovers the full damage by construction.}
 \label{tab:restoration-approaches}
 {\footnotesize
 \begin{tabular}{lcccc}
 \toprule
 & \multicolumn{2}{c}{Synthetic} & \multicolumn{2}{c}{Real-World} \\
 \cmidrule(lr){2-3} \cmidrule(lr){4-5}
-Restoration Approach & Recovered ($\uparrow$) & Cells & Recovered ($\uparrow$) & Cells \\
+Restoration Approach & Recovered ($\uparrow$) & Pairs & Recovered ($\uparrow$) & Pairs \\
+\midrule
+"""
+        + "\n".join(rows)
+        + r"""
+\bottomrule
+\end{tabular}
+}
+\end{table}
+""",
+    )
+
+
+def predictor_table(paper: pd.DataFrame, view: pd.DataFrame) -> None:
+    datasets = set(view["dataset"].unique())
+    groups = {
+        "Synthetic": SYNTHETIC & datasets,
+        "Real-World": frozenset(datasets - SYNTHETIC),
+    }
+    rows = []
+    for setting, source in (
+        ("Complete-Data Predictor", paper),
+        ("Predictor Trained on Training Data", view),
+    ):
+        entries = []
+        for members in groups.values():
+            pairs = []
+            for dataset in sorted(members):
+                for method in METHODS:
+                    cell = _cell(source, dataset, method, "mcar", float(RATE))
+                    available = _cell(
+                        view, dataset, method, "mcar", float(RATE)
+                    )
+                    complete = _complete(paper, dataset, method)
+                    if "restricted" in cell and "restricted" in available:
+                        pairs.append((cell, complete))
+            damages = [
+                complete - cell["restricted"] for cell, complete in pairs
+            ]
+            damaged = [
+                (cell, complete)
+                for cell, complete in pairs
+                if complete - cell["restricted"] >= DAMAGE_THRESHOLD
+            ]
+            total = sum(
+                complete - cell["restricted"] for cell, complete in damaged
+            )
+            shares = []
+            for strategy in ("pvae_label_conditioned", "mean_fill"):
+                usable = [(c, k) for c, k in damaged if strategy in c]
+                gain = sum(c[strategy] - c["restricted"] for c, _ in usable)
+                shares.append(
+                    gain / total
+                    if usable and total and len(usable) == len(damaged)
+                    else math.nan
+                )
+            entries.append(
+                f"{_fmt(float(np.mean(damages)), 3) if damages else '--'} & "
+                + " & ".join(_fmt(value) for value in shares)
+            )
+        rows.append(f"{setting} & " + " & ".join(entries) + r" \\")
+    _write(
+        "predictor_ablation.tex",
+        r"""\begin{table}[H]
+\centering
+\caption{Mean missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete data, as in the main experiments, or on the same incomplete or restored training data as the policy. Damage is measured against complete-data training with the complete-data predictor; the recovered fractions are summed over the method--dataset pairs with a damage of at least $0.01$.}
+\label{tab:predictor-ablation}
+{\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{3}{c}{Synthetic} & \multicolumn{3}{c}{Real-World} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+Predictor & Damage & PVAE ($\uparrow$) & Mean-Fill ($\uparrow$) & Damage & PVAE ($\uparrow$) & Mean-Fill ($\uparrow$) \\
 \midrule
 """
         + "\n".join(rows)
@@ -425,6 +498,9 @@ def main() -> None:
             "core_group_missingness_v2",
             "induced_real_missingness_v2",
             "induced_nonuniform_missingness_v2",
+            "core_group_missingness_v2_e2b",
+            "induced_real_missingness_v2_e2b",
+            "induced_nonuniform_missingness_v2_e2b",
             "sklearn_imputers_core_group",
             "sklearn_imputers_induced_real",
             "sklearn_imputers_induced_nonuniform",
@@ -451,6 +527,13 @@ def main() -> None:
     complete_instances_table(arguments.extra_namespaces[:3])
     mask_conditioning_table(paper)
     approaches_table(scores)
+    view_paths = [
+        SUMMARY_ROOT / f"view_classifier_{group}" / "summary.csv"
+        for group in ("core_group", "induced_real", "induced_nonuniform")
+    ]
+    view_paths = [path for path in view_paths if path.exists()]
+    if view_paths:
+        predictor_table(scores, _scores(view_paths))
 
 
 if __name__ == "__main__":
