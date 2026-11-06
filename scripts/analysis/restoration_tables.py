@@ -64,6 +64,7 @@ APPROACHES = {
     "true_completion": "True Completion",
 }
 DAMAGE_THRESHOLD = 0.01
+REFERENCE_RATE = {0.3: 0.5, 0.5: 0.7, 0.7: 0.5}
 ALPHA = 0.05
 RATE = "0.7"
 
@@ -196,7 +197,6 @@ def significance_table(instances: pd.DataFrame) -> None:
             instances.loc[instances["mechanism"] == mechanism, "p"].unique()
         ):
             counts = {"all": [0, 0, 0], "damaged": [0, 0, 0]}
-            recovered = []
             selected = instances[
                 (instances["mechanism"] == mechanism) & (instances["p"] == p)
             ]
@@ -217,7 +217,14 @@ def significance_table(instances: pd.DataFrame) -> None:
                 difference = (
                     pivot["pvae_label_conditioned"] - pivot["restricted"]
                 ).dropna()
-                damage = complete - pivot["restricted"].mean()
+                reference = instances[
+                    (instances["dataset"] == dataset)
+                    & (instances["method"] == method)
+                    & (instances["mechanism"] == mechanism)
+                    & (instances["p"] == REFERENCE_RATE[float(p)])
+                    & (instances["strategy"] == "restricted")
+                ]["score"]
+                damage = complete - float(reference.mean())
                 pvalue = float(
                     cast("Any", stats.ttest_1samp(difference, 0.0)).pvalue
                 )
@@ -233,27 +240,26 @@ def significance_table(instances: pd.DataFrame) -> None:
                 counts["all"][index] += 1
                 if damage >= DAMAGE_THRESHOLD:
                     counts["damaged"][index] += 1
-                    recovered.append(difference.mean() / damage)
             rows.append(
                 f"{label} & ${p:g}$ & "
                 + " & ".join(f"${value}$" for value in counts["all"])
                 + f" & ${sum(counts['damaged'])}$ & "
                 + " & ".join(f"${value}$" for value in counts["damaged"])
-                + f" & {_fmt(float(np.median(recovered)))} \\\\"
+                + r" \\"
             )
     _write(
         "restoration_significance.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training (paired $t$-test, $\alpha = 0.05$), over all and over damaged method--dataset combinations (damage at least $0.01$).}
+\caption{Generative restoration against restricted training (paired $t$-test, $\alpha = 0.05$), over all and over damaged method--dataset combinations (damage at least $0.01$ at the rate $p' = 0.5$, or $p' = 0.7$ for $p = 0.5$).}
 \label{tab:restoration-significance}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccccccccc}
+\begin{tabular}{lccccccccc}
 \toprule
-& & \multicolumn{3}{c}{All Combinations} & \multicolumn{5}{c}{Damaged Combinations} \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-10}
-Mechanism & $p$ & Better & Worse & n.s. & Comb. & Better & Worse & n.s. & Recovered \\
+& & \multicolumn{3}{c}{All Combinations} & \multicolumn{4}{c}{Damaged Combinations} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-9}
+Mechanism & $p$ & Better & Worse & n.s. & Comb. & Better & Worse & n.s. \\
 \midrule
 """
         + "\n".join(rows)
@@ -431,6 +437,129 @@ Restoration Approach & Recovered ($\uparrow$) & Comb. & Recovered ($\uparrow$) &
     )
 
 
+DECOMPOSITION = {
+    "zero_fill": "Zero-Fill",
+    "mean_fill": "Mean-Fill",
+    "pvae_label_conditioned": "PVAE",
+    "pvae_oracle": "PVAE Fit on Complete Data",
+}
+
+
+def decomposition_table(scores: pd.DataFrame) -> None:
+    datasets = sorted(scores["dataset"].unique())
+    rows = []
+    for method, label in METHODS.items():
+        used = []
+        for dataset in datasets:
+            cell = _cell(scores, dataset, method, "mcar", float(RATE))
+            complete = _complete(scores, dataset, method)
+            if np.isfinite(complete) and {"restricted", *DECOMPOSITION} <= set(
+                cell
+            ):
+                used.append((cell, complete))
+        if not used:
+            continue
+        damage = float(np.mean([c - cell["restricted"] for cell, c in used]))
+        errors = [
+            float(np.mean([cell[strategy] - c for cell, c in used]))
+            for strategy in DECOMPOSITION
+        ]
+        rows.append(
+            f"{label} & {_fmt(damage, 3)} & "
+            + " & ".join(_fmt(error, 3) for error in errors)
+            + f" & ${len(used)}$ \\\\"
+        )
+    _write(
+        "restoration_decomposition.tex",
+        r"""\begin{table}[H]
+\centering
+\caption{Missingness damage (complete minus restricted training) and restoration error (restored minus complete training) under MCAR at $p = 0.7$, averaged over datasets.}
+\label{tab:restoration-decomposition}
+{\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
+\toprule
+& & \multicolumn{4}{c}{Restoration Error} & \\
+\cmidrule(lr){3-6}
+Method & Damage & """
+        + " & ".join(DECOMPOSITION.values())
+        + r""" & Datasets \\
+\midrule
+"""
+        + "\n".join(rows)
+        + r"""
+\bottomrule
+\end{tabular}
+}
+\end{table}
+""",
+    )
+
+
+def size_table() -> None:
+    rows = []
+    for n in (500, 1000, 4000, 16000):
+        path = SUMMARY_ROOT / f"size_sweep_n{n}" / "summary.csv"
+        if not path.exists():
+            continue
+        scores = _scores([path])
+        entries = []
+        for dataset in ("cube", "cube_nm"):
+            methods = [
+                method
+                for method in METHODS
+                if "restricted"
+                in _cell(scores, dataset, method, "mcar", float(RATE))
+            ]
+            cells = [
+                _cell(scores, dataset, m, "mcar", float(RATE)) for m in methods
+            ]
+            complete = [_complete(scores, dataset, m) for m in methods]
+            damage = np.mean(
+                [
+                    c - cell["restricted"]
+                    for cell, c in zip(cells, complete, strict=True)
+                ]
+            )
+            errors = [
+                np.mean(
+                    [
+                        cell[strategy] - c
+                        for cell, c in zip(cells, complete, strict=True)
+                    ]
+                )
+                for strategy in ("pvae_label_conditioned", "pvae_oracle")
+            ]
+            entries.append(
+                f"{_fmt(float(damage), 3)} & "
+                + " & ".join(_fmt(float(e), 3) for e in errors)
+            )
+        rows.append(f"${n}$ & " + " & ".join(entries) + r" \\")
+    _write(
+        "size_sweep.tex",
+        r"""\begin{table}[H]
+\centering
+\caption{Missingness damage and restoration error under MCAR at $p = 0.7$ against the dataset size $n$, averaged over methods.}
+\label{tab:size-sweep}
+{\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{3}{c}{CUBE} & \multicolumn{3}{c}{CUBE-NM} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+$n$ & Damage & PVAE & PVAE Fit on Complete Data & Damage & PVAE & PVAE Fit on Complete Data \\
+\midrule
+"""
+        + "\n".join(rows)
+        + r"""
+\bottomrule
+\end{tabular}
+}
+\end{table}
+""",
+    )
+
+
 def predictor_table(scores: pd.DataFrame, view: pd.DataFrame) -> None:
     datasets = set(view["dataset"].unique())
     groups = {
@@ -571,6 +700,8 @@ def main() -> None:
     complete_instances_table(arguments.dataset_namespaces)
     mask_conditioning_table(paper)
     approaches_table(scores)
+    decomposition_table(scores)
+    size_table()
     view_paths = [
         SUMMARY_ROOT / f"view_classifier_{group}" / "summary.csv"
         for group in ("core_group", "induced_real", "induced_nonuniform")

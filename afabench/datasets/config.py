@@ -28,6 +28,7 @@ class DatasetGenerationConfig:
     dataset: DatasetConfig
     fixed_test_seed: int | None = None
     stratify: bool = False
+    max_train_size: int | None = None
 
 
 cs.store(name="dataset_generation", node=DatasetGenerationConfig)

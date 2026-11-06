@@ -29,6 +29,7 @@ def generate_and_save_split(
     *,
     fixed_test_seed: int | None = None,
     stratify: bool = False,
+    max_train_size: int | None = None,
 ) -> None:
     """
     Generate and save a single train/val/test split.
@@ -84,6 +85,10 @@ def generate_and_save_split(
             test_size=relative_val_size,
             random_state=seed_for_split,
             stratify=train_val_labels,
+        )
+    if max_train_size is not None and len(train_indices) > max_train_size:
+        train_indices = random.Random(seed_for_split).sample(
+            list(train_indices), max_train_size
         )
     train_dataset, val_dataset, test_dataset = dataset.create_splits(
         train_indices,
@@ -158,6 +163,7 @@ def main(cfg: DatasetGenerationConfig) -> None:
             },
             fixed_test_seed=cfg.fixed_test_seed,
             stratify=cfg.stratify,
+            max_train_size=cfg.max_train_size,
         )
     log.info(
         f"Generated {len(cfg.instance_indices)} dataset instances to {

@@ -1,0 +1,7 @@
+artifact_namespace: size_sweep_real_n8000
+dataset_generation_params:
+  diabetes: &n
+    - fixed_test_seed=100
+    - stratify=true
+    - max_train_size=8000
+  miniboone: *n
