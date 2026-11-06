@@ -532,6 +532,8 @@ NATIVE_AUDIT_OUTPUTS = (
 )
 
 configured_strategies = ["complete", "restricted", *COMMON_STRATEGIES]
+if CLASSIFIER_SOURCE == "view" and "true_completion" in COMMON_STRATEGIES:
+    raise ValueError("classifier_source 'view' does not support true_completion")
 for spec in METHOD_SPECS.values():
     configured_strategies.extend(spec.allowed_strategies or ())
     configured_strategies.extend(spec.extra_strategies)
