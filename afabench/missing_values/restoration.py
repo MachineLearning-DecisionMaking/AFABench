@@ -12,6 +12,7 @@ from afabench.core.bundle_system.torch_bundle import TorchModelBundle
 from afabench.core.utils import set_seed
 from afabench.datasets.training_views import (
     TrainingDatasetView,
+    concatenate_training_views,
     pvae_restored_training_view,
 )
 
@@ -26,7 +27,9 @@ _STRATEGY_DISPLAY_NAMES = {
     "pvae_label_conditioned": "Generative restoration",
     "pvae_label_free": "PVAE (label-free)",
     "pvae_oracle": "PVAE (oracle)",
+    "pvae_multi_draw": "PVAE (5 draws)",
 }
+MULTI_DRAWS = 5
 
 
 def _batches(n_rows: int, batch_size: int) -> Iterator[slice]:
@@ -103,25 +106,33 @@ def restore_view_with_pvae(
         msg = "batch_size must be positive."
         raise ValueError(msg)
     use_label = strategy != "pvae_label_free"
+    n_draws = MULTI_DRAWS if strategy == "pvae_multi_draw" else 1
     device = model.device
-    reconstructed: list[torch.Tensor] = []
-    with torch.inference_mode():
-        for batch_slice in _batches(len(view), batch_size):
-            features = view.features[batch_slice].to(device)
-            availability = view.source_availability[batch_slice].to(device)
-            labels = view.labels[batch_slice].to(device) if use_label else None
-            _, estimate = model.masked_reconstruction(
-                masked_features=features,
-                feature_mask=availability,
-                n_classes=view.label_shape.numel(),
-                label=labels,
+    views: list[TrainingDatasetView] = []
+    for _ in range(n_draws):
+        reconstructed: list[torch.Tensor] = []
+        with torch.inference_mode():
+            for batch_slice in _batches(len(view), batch_size):
+                features = view.features[batch_slice].to(device)
+                availability = view.source_availability[batch_slice].to(device)
+                labels = (
+                    view.labels[batch_slice].to(device) if use_label else None
+                )
+                _, estimate = model.masked_reconstruction(
+                    masked_features=features,
+                    feature_mask=availability,
+                    n_classes=view.label_shape.numel(),
+                    label=labels,
+                )
+                reconstructed.append(estimate.cpu())
+        views.append(
+            pvae_restored_training_view(
+                view,
+                torch.cat(reconstructed),
+                strategy=strategy,
             )
-            reconstructed.append(estimate.cpu())
-    return pvae_restored_training_view(
-        view,
-        torch.cat(reconstructed),
-        strategy=strategy,
-    )
+        )
+    return views[0] if n_draws == 1 else concatenate_training_views(views)
 
 
 def _reference_rmse(
@@ -133,6 +144,10 @@ def _reference_rmse(
     reference, _ = load_bundle(reference_path)
     reference = cast("AFADataset", cast("object", reference))
     reference_features, _ = reference.get_all_data()
+    reference_features = reference_features.repeat(
+        len(restored) // len(reference_features),
+        *([1] * (reference_features.ndim - 1)),
+    )
     missing = ~restored.source_availability
     if not missing.any():
         return 0.0

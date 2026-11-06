@@ -78,3 +78,30 @@ def test_stepwise_pvae_is_seeded_and_label_free() -> None:
 
     assert torch.equal(first_draw, second_draw)
     assert model.labels[-2:] == [None, None]
+
+
+def test_multi_draw_stacks_conditioned_draws() -> None:
+    dataset = CubeNMDataset(n_samples=4, seed=1, n_contexts=2)
+    availability = torch.ones_like(dataset.features, dtype=torch.bool)
+    availability[:, ::2] = False
+    restricted = restricted_training_view(dataset, availability)
+    model = _FakePVAE()
+
+    restored = restore_view_with_pvae(
+        restricted,
+        cast("ODINPretrainingModel", cast("object", model)),
+        strategy="pvae_multi_draw",
+        batch_size=3,
+    )
+
+    draws = len(restored) // len(restricted)
+    assert draws == 5
+    assert all(label is not None for label in model.labels)
+    assert torch.equal(restored.labels, restricted.labels.repeat(draws, 1))
+    repeated = availability.repeat(draws, 1)
+    assert torch.equal(restored.source_availability, repeated)
+    assert restored.selection_availability.all()
+    assert torch.equal(
+        restored.features[repeated],
+        dataset.features.repeat(draws, 1)[repeated],
+    )

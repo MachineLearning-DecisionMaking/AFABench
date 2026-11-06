@@ -260,6 +260,25 @@ def sklearn_filled_training_views(
     return fill(train_view), fill(val_view)
 
 
+def concatenate_training_views(
+    views: list[TrainingDatasetView],
+) -> TrainingDatasetView:
+    first = views[0]
+    return TrainingDatasetView(
+        features=torch.cat([view.features for view in views]),
+        labels=torch.cat([view.labels for view in views]),
+        source_availability=torch.cat(
+            [view.source_availability for view in views]
+        ),
+        selection_availability=torch.cat(
+            [view.selection_availability for view in views]
+        ),
+        feature_costs=first.get_feature_acquisition_costs(),
+        source_dataset_class_name=first.source_dataset_class_name,
+        strategy=first.strategy,
+    )
+
+
 def true_value_training_view(
     dataset: AFADataset,
     restricted_view: TrainingDatasetView,

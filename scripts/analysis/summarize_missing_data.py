@@ -35,6 +35,7 @@ _STRATEGY_DISPLAY = {
     "pvae_label_free": "PVAE (label-free)",
     "pvae_stepwise": "Stepwise (PVAE)",
     "pvae_oracle": "PVAE (oracle)",
+    "pvae_multi_draw": "PVAE (5 draws)",
     "true_completion": "True completion",
 }
 

@@ -531,7 +531,7 @@ NATIVE_AUDIT_OUTPUTS = (
     else []
 )
 
-configured_strategies = ["complete", *COMMON_STRATEGIES]
+configured_strategies = ["complete", "restricted", *COMMON_STRATEGIES]
 for spec in METHOD_SPECS.values():
     configured_strategies.extend(spec.allowed_strategies or ())
     configured_strategies.extend(spec.extra_strategies)
