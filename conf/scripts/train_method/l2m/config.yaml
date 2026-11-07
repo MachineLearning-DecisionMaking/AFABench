@@ -10,6 +10,7 @@ defaults:
   - initializer: ???
   - unmasker: ???
   - dataset_key: ???
+  - task_prior: real_pool
   - _self_
   - optional dataset_override@_global_: ${dataset_key}
   - override hydra/job_logging: output_dir_colorlog
@@ -18,13 +19,12 @@ defaults:
 
 # The authors' MiniBooNE config (configs/miniboone.yaml in
 # reAIM-Lab/Learning-To-Measure at the vendored commit), the family default.
-# dataset_override/<dataset_key>.yaml applies the authors' dataset config.
+# dataset_override/<dataset_key>.yaml sets every per-dataset value.
 # The architecture comes from the pretrained model bundle.
 
-# The pretrained model's task prior and its worker processes; see the
-# pretraining config.
-task_prior: real_pool
-task_workers: 0
+# The pretrained model's task prior (task_prior/<name>.yaml sets it and its
+# worker processes) and TabICL v1 sub-priors; see the pretraining config.
+prior_type: prior_bag
 batch_size: 8 # batch_size_afa
 sequence_length: 1000 # num_points
 n_steps: 50000 # num_steps_afa

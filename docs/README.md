@@ -81,6 +81,7 @@ guides appear under each audience they serve, linking to one canonical page.
 - [Estimate the compute of a run](how-to/maintainer/estimate_compute.md)
 - [Add a dataset](how-to/repository_adopter/add_dataset.md)
 - [Add a method](how-to/repository_adopter/add_method.md)
+- [Run L2M](how-to/maintainer/run_l2m.md)
 - [Create output snapshots](how-to/maintainer/create_output_snapshots.md)
 - [Restore an output snapshot](how-to/maintainer/restore_an_output_snapshot.md)
 - [Publish a benchmark release](how-to/maintainer/publish_a_benchmark_release.md)
@@ -90,6 +91,7 @@ guides appear under each audience they serve, linking to one canonical page.
 - [Pipeline configuration](reference/pipeline_configuration.md)
 - [Requested walltime](reference/requested_walltime.md)
 - [Bundle format](reference/bundle_format.md)
+- [L2M](reference/l2m.md): configuration, files and runs
 - [Datasets](reference/datasets/README.md): one page per dataset
 - [Evaluation dataframes](reference/evaluation_dataframes.md)
 - [Evaluation performance plots](reference/evaluation_plots.md)
@@ -108,6 +110,7 @@ guides appear under each audience they serve, linking to one canonical page.
 - [Output snapshots](explanation/output_snapshots.md)
 - [Framework limitations](explanation/limitations.md)
 - [L2M trained on the TabICL v1 prior](explanation/l2m_tabicl_prior.md)
+- [How the L2M runs relate to the authors' code](explanation/l2m_baseline_audit.md)
 - [What GDFS and DIME share, and where the port departs from upstream](explanation/gdfs_dime_shared_code.md)
 - Investigations behind ADRs:
   [training-contract duplication](explanation/training_contract_inventory.md),

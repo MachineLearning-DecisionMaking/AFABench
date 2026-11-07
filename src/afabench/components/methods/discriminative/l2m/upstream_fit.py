@@ -9,13 +9,16 @@ validation function scores a fixed batch of validation tasks, and the state
 with the lowest validation loss is kept. As upstream, the last step is not
 validated unless it falls on the interval.
 
-The pool task priors are upstream's: tasks draw instances from the
-pretraining pool, normalize each feature within the task, and label them
-with a random BNN. Only the pool's features are used; the train split's
-labels are discarded. The pool is the train split's features
-(`TaskPrior.real_pool`) or a synthetic draw of the dataset's feature count
-(`TaskPrior.synthetic_pool`). `TaskPrior.tabicl_v1` has no pool: the TabICL
-v1 prior generates each task's features and labels.
+The task priors:
+
+- `TaskPrior.real_pool` is upstream's real-data prior: tasks draw instances
+  from the pretraining pool of the train split's features, normalize each
+  feature within the task, and label them with a random BNN. The train
+  split's labels are discarded.
+- `TaskPrior.synthetic` is upstream's simulation prior with the same
+  labels (`SyntheticTaskSampler`): new features for every task.
+- `TaskPrior.tabicl_v1`: the TabICL v1 prior generates each task's features
+  and labels.
 """
 
 import logging
@@ -27,11 +30,15 @@ from typing import Any
 import torch
 
 from afabench.components.methods.discriminative.l2m.config import (
+    TabICLPriorType,
     TaskPrior,
 )
 from afabench.components.methods.discriminative.l2m.models import (
     L2MModel,
     UpstreamBatch,
+)
+from afabench.components.methods.discriminative.l2m.synthetic_task_sampler import (
+    SyntheticTaskSampler,
 )
 from afabench.components.methods.discriminative.l2m.tabicl_task_sampler import (
     TabICLTaskSampler,
@@ -53,10 +60,6 @@ log = logging.getLogger(__name__)
 _UPSTREAM_SIMULATION = "sim"
 # Upstream's `inner_loop_steps` for MiniBooNE: one update per batch.
 _INNER_LOOP_STEPS = 1
-# The synthetic feature source's box, this benchmark's own choice as in the
-# earlier port; the paper does not describe it.
-_SYNTHETIC_FEATURE_LOW = -2.0
-_SYNTHETIC_FEATURE_HIGH = 2.0
 
 
 class UpstreamAccelerator:
@@ -142,28 +145,12 @@ def draw_pretraining_pool(
     return features.reshape(len(features), -1)[indices].clone()
 
 
-def draw_synthetic_pool(*, size: int, n_features: int, seed: int) -> Features:
-    """
-    Draw `size` instances uniformly from the box [-2, 2] in every feature.
-
-    Stub of the synthetic feature prior of the earlier independent L2M port
-    (`l2m_synthetic_feature_prior`, `task_sampler.py` at `f814beec^`). That
-    port drew fresh features for every task; here the tasks sample from one
-    fixed pool, as they do from the real pretraining pool, and label and
-    missingness come from upstream's task prior. Features are normalized
-    within each task, so the box only sets the shape of the marginals.
-    """
-    generator = torch.Generator().manual_seed(seed)
-    return _SYNTHETIC_FEATURE_LOW + (
-        _SYNTHETIC_FEATURE_HIGH - _SYNTHETIC_FEATURE_LOW
-    ) * torch.rand(size, n_features, generator=generator)
-
-
 def make_task_sampler(
     train_dataset: AFADataset,
     model: L2MModel,
     *,
     task_prior: TaskPrior,
+    prior_type: TabICLPriorType,
     pool_size: int,
     sequence_length: int,
     seed: int,
@@ -172,10 +159,10 @@ def make_task_sampler(
     Draw the tasks' sampler for `task_prior`.
 
     The real pool samples the train split's features, which it caps at the
-    split's size; the synthetic pool ignores the data and takes only its
-    feature count. A task needs `sequence_length` instances, so `pool_size`
-    must be at least that, as the configs check. The TabICL v1 prior takes
-    the model's feature and class counts.
+    split's size. A task needs `sequence_length` instances, so `pool_size`
+    must be at least that, as the configs check. The synthetic prior and the
+    TabICL v1 prior ignore the data and take only the model's feature count,
+    and the latter its class count; it mixes the sub-priors of `prior_type`.
     """
     match task_prior:
         case TaskPrior.real_pool:
@@ -185,15 +172,16 @@ def make_task_sampler(
                 sequence_length=sequence_length,
                 seed=seed,
             )
-        case TaskPrior.synthetic_pool:
-            pool = draw_synthetic_pool(
-                size=pool_size, n_features=model.n_features, seed=seed
+        case TaskPrior.synthetic:
+            return SyntheticTaskSampler(
+                n_features=model.n_features, label_dim=model.label_dim
             )
         case TaskPrior.tabicl_v1:
             return TabICLTaskSampler(
                 n_features=model.n_features,
                 n_classes=model.n_classes,
                 label_dim=model.label_dim,
+                prior_type=prior_type,
             )
     return make_sampler(pool, label_dim=model.label_dim)
 

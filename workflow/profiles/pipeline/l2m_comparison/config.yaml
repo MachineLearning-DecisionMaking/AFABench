@@ -1,0 +1,17 @@
+# Every method of methods/all.yaml, including the L2M runs l2m, l2m_synth and
+# l2m_better_synth, on the three datasets whose shapes the L2M runs are
+# configured for (docs/reference/l2m.md). A method skips the datasets it
+# ignores in method_options.
+snakefile: workflow/snakefiles/orchestration/pipeline.smk
+
+configfile:
+  - workflow/conf/datasets/l2m_comparison.yaml
+  - workflow/conf/eval_hard_budgets/all.yaml
+  - workflow/conf/methods/all.yaml
+  - workflow/conf/method_sets/all.yaml
+  - workflow/conf/dataset_sets/all.yaml
+  - workflow/conf/method_options/all.yaml
+  - workflow/conf/pretrain_mappings/all.yaml
+  - workflow/conf/soft_budget_params/all.yaml
+  - workflow/conf/unmaskers/all.yaml
+  - workflow/conf/classifier_names/all.yaml

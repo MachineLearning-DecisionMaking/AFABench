@@ -51,6 +51,7 @@ dependencies = [
   "typer>=0.21.1",
   "ucimlrepo>=0.0.7",
   "wandb>=0.19.10",
+  "xgboost-cpu>=3.4.1",
 ]
 
 [dependency-groups]

@@ -1,19 +1,44 @@
 """The TabICL v1 task prior as L2M's task generator."""
 
 import random
+import sys
 
 import numpy as np
 import pytest
 import torch
 
 from afabench.components.methods.discriminative.l2m.config import (
+    TabICLPriorType,
     TaskPrior,
 )
 from afabench.components.methods.discriminative.l2m.tabicl_task_sampler import (
+    MAX_PRIOR_CLASSES,
     TabICLTaskSampler,
     batch_seed,
     task_batches,
 )
+
+TREE_MODULE = (
+    "afabench.components.methods.discriminative.l2m.tabicl_v1_prior."
+    "tabiclv1.treeSCM"
+)
+# The rejection reasons of `TabICLTaskSampler`.
+REJECTION_REASONS = {
+    "failed",
+    "invalid",
+    "not_finite",
+    "wrong_features",
+    "wrong_classes",
+}
+# (name, features, classes, label_dim, instances per task) of the datasets
+# L2M runs on: CUBE, the MiniBooNE subset (binary, one label column) and
+# METABRIC. The instance counts are the smallest at which the prior draws
+# every class reliably, not the configured task sizes.
+DATASET_SHAPES = [
+    pytest.param(20, 8, 8, 250, id="cube"),
+    pytest.param(10, 2, 1, 120, id="miniboone_subset"),
+    pytest.param(11, 6, 6, 200, id="metabric"),
+]
 
 N_FEATURES = 20
 N_CLASSES = 8
@@ -222,9 +247,160 @@ def test_streams_and_batches_have_distinct_seeds() -> None:
     assert len(seeds) == 400
 
 
-def test_only_the_tabicl_prior_has_no_pool() -> None:
+def test_only_real_pool_has_a_pool_and_only_tabicl_has_workers() -> None:
     assert {prior: prior.uses_pool for prior in TaskPrior} == {
         TaskPrior.real_pool: True,
-        TaskPrior.synthetic_pool: True,
+        TaskPrior.synthetic: False,
         TaskPrior.tabicl_v1: False,
     }
+    assert {prior: prior.uses_workers for prior in TaskPrior} == {
+        TaskPrior.real_pool: False,
+        TaskPrior.synthetic: False,
+        TaskPrior.tabicl_v1: True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("prior_type", "expected"),
+    [
+        (TabICLPriorType.prior_bag, {"mlp": 0.961, "gp": 0.039}),
+        (
+            TabICLPriorType.prior_bag_plus_tree,
+            {"mlp": 0.661, "gp": 0.039, "tree": 0.3},
+        ),
+        (TabICLPriorType.tree_only, {"tree": 1.0}),
+    ],
+)
+def test_prior_types_mix_the_documented_sub_priors(
+    prior_type: TabICLPriorType, expected: dict[str, float]
+) -> None:
+    sampler = TabICLTaskSampler(
+        n_features=N_FEATURES,
+        n_classes=N_CLASSES,
+        label_dim=N_CLASSES,
+        prior_type=prior_type,
+    )
+
+    assert sampler.prior.prior_weights == expected
+    assert set(sampler.prior.base_priors) == set(expected)
+
+
+@pytest.mark.parametrize(
+    ("n_features", "n_classes", "label_dim", "n_rows"), DATASET_SHAPES
+)
+@pytest.mark.parametrize(
+    "prior_type",
+    [TabICLPriorType.prior_bag_plus_tree, TabICLPriorType.tree_only],
+)
+def test_tree_tasks_have_exactly_the_datasets_features_and_classes(
+    prior_type: TabICLPriorType,
+    n_features: int,
+    n_classes: int,
+    label_dim: int,
+    n_rows: int,
+) -> None:
+    sampler = TabICLTaskSampler(
+        n_features=n_features,
+        n_classes=n_classes,
+        label_dim=label_dim,
+        prior_type=prior_type,
+    )
+
+    batch = sampler.sample(
+        batch_size=3,
+        max_num_points=n_rows,
+        num_observed=n_features,
+        seed=2,
+    )
+
+    assert batch["x"].shape == (3, n_rows, n_features)
+    assert batch["y"].shape == (3, n_rows, label_dim)
+    assert batch["x"].isfinite().all()
+    labels = (
+        batch["y"].argmax(dim=-1)
+        if label_dim > 1
+        else batch["y"].squeeze(-1).long()
+    )
+    # Never more classes than the label encodes, and exactly the dataset's.
+    for task_labels in labels:
+        assert task_labels.unique().tolist() == list(range(n_classes))
+    assert set(sampler.rejections) <= REJECTION_REASONS
+
+
+def test_tree_tasks_are_reproducible_from_their_seed() -> None:
+    sampler = TabICLTaskSampler(
+        n_features=N_FEATURES,
+        n_classes=N_CLASSES,
+        label_dim=N_CLASSES,
+        prior_type=TabICLPriorType.tree_only,
+    )
+
+    first = _sample(sampler, seed=9, batch_size=2)
+
+    assert torch.equal(first["x"], _sample(sampler, seed=9, batch_size=2)["x"])
+    assert not torch.equal(
+        first["x"], _sample(sampler, seed=10, batch_size=2)["x"]
+    )
+
+
+def test_tree_models_use_one_thread_per_task_process() -> None:
+    sampler = TabICLTaskSampler(
+        n_features=N_FEATURES,
+        n_classes=N_CLASSES,
+        label_dim=N_CLASSES,
+        prior_type=TabICLPriorType.tree_only,
+    )
+
+    _sample(sampler, seed=0, batch_size=1)
+
+    assert sys.modules[TREE_MODULE].N_JOBS == 1  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_the_bag_prior_never_imports_the_tree_prior_or_xgboost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(sys.modules, TREE_MODULE, raising=False)
+    # A module set to None raises ImportError on import.
+    monkeypatch.setitem(sys.modules, "xgboost", None)
+    sampler = TabICLTaskSampler(
+        n_features=N_FEATURES, n_classes=N_CLASSES, label_dim=N_CLASSES
+    )
+
+    _sample(sampler, seed=0, batch_size=2)
+
+    assert sampler.prior_type is TabICLPriorType.prior_bag
+    assert TREE_MODULE not in sys.modules
+
+
+def test_the_tree_prior_fails_loudly_without_xgboost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "xgboost", None)
+    sampler = TabICLTaskSampler(
+        n_features=N_FEATURES,
+        n_classes=N_CLASSES,
+        label_dim=N_CLASSES,
+        prior_type=TabICLPriorType.tree_only,
+    )
+
+    with pytest.raises(ImportError):
+        _sample(sampler, seed=0, batch_size=1)
+
+
+@pytest.mark.parametrize(
+    ("n_features", "n_classes", "label_dim", "match"),
+    [
+        (5, MAX_PRIOR_CLASSES + 1, MAX_PRIOR_CLASSES + 1, "between 2 and 10"),
+        (5, 1, 1, "between 2 and 10"),
+        (5, 2, 2, "label_dim=2 does not encode n_classes=2"),
+        (5, 6, 1, "label_dim=1 does not encode n_classes=6"),
+        (0, 4, 4, "n_features=0"),
+    ],
+)
+def test_sizes_the_prior_or_model_cannot_have_fail_loudly(
+    n_features: int, n_classes: int, label_dim: int, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        TabICLTaskSampler(
+            n_features=n_features, n_classes=n_classes, label_dim=label_dim
+        )

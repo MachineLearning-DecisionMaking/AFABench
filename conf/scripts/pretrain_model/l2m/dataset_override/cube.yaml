@@ -1,0 +1,15 @@
+# @package _global_
+# Per-dataset L2M settings, for every task prior (task_prior/*.yaml); the
+# feature and class counts come from the dataset itself. Only these values
+# override ../config.yaml. A value that equals the default is repeated on
+# purpose, so that all of the dataset's settings are in this file; leaving it
+# out would change nothing.
+# CUBE: 20 features, 8 classes, 600 train and 200 validation instances. Not an
+# authors' dataset. A task has 600 instances, the size of the train split,
+# which is the most the real_pool prior can draw without replacement; its
+# queries see up to 599 labelled instances, more than the 200-instance
+# context set at evaluation.
+sequence_length: 600
+pretraining_pool_size: 600 # the whole train split
+n_steps: 100000
+batch_size: 8

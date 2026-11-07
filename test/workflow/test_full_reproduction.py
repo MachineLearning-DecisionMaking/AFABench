@@ -28,8 +28,11 @@ FORMER_GPU_METHODS = {
     "dime",
 }
 # Methods added since, which run on the GPU nodes and have jobs on the cube.
-# (l2m has none there: it ignores the cube.)
-GPU_METHODS_ADDED_SINCE = {"l2m_tabicl_prior"}
+GPU_METHODS_ADDED_SINCE = {
+    "l2m",
+    "l2m_synth",
+    "l2m_better_synth",
+}
 # Membership of the retired workflow/conf/methods/cpu.yaml.
 FORMER_CPU_METHODS = {
     "ol_without_mask",

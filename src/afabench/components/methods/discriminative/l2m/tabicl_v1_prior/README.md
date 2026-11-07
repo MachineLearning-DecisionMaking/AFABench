@@ -26,11 +26,14 @@ The adapter that uses the prior is `../tabicl_task_sampler.py`.
 | `tabiclv1/fast_gp.py` | `prior/tabiclv1/fast_gp.py` |
 | `tabiclv1/mlp.py` | `prior/tabiclv1/mlp.py` |
 | `tabiclv1/prior_bag.py` | `prior/tabiclv1/prior_bag.py` |
+| `tabiclv1/treeSCM.py` | `prior/tabiclv1/treeSCM.py` |
 | `tabiclv1/utils.py` | `prior/tabiclv1/utils.py` |
 | `utils_torch.py` | `model/utils_torch.py` of Mother-Tree, reduced |
 
-The origin's TabICL v2 prior, its TreeSCM, data loader and generate scripts
-are not here; the adapter uses only the bag of MLP and GP priors.
+The origin's TabICL v2 prior, data loader and generate scripts are not
+here. `tabiclv1/treeSCM.py` (the origin's `prior/tabiclv1/treeSCM.py`, from
+the thesis repository's commit `3f5d546`) is the optional third sub-prior
+of the adapter's `prior_type` mixtures (`prior_bag_plus_tree`, `tree_only`).
 
 Every change is marked in place, with `# PATCH(afabench)` for the
 environment and `# L2M CHANGE` for the two that alter what the prior
@@ -60,6 +63,20 @@ computes:
   drawing from 1 to `num_features - 1`. Without the config entries the
   prior computes what the original does. Their comments name the adapter
   here instead of the thesis repository's file.
+- **`tabiclv1/treeSCM.py`** (`PATCH(afabench)`, three edits): `from
+  model.utils_torch import default_device` points at this package's
+  `utils_torch.py`; `from xgboost import XGBRegressor` sits in the
+  `tree_model == "xgboost"` branch of `TreeLayer` instead of at module level
+  (the original's import was commented out although xgboost is the default
+  tree model, so every TreeSCM raised `NameError`), which also lets runs
+  without TreeSCM do without the package; and every tree model's `n_jobs=-1`
+  (every CPU) became the module constant `N_JOBS`, which stays -1 until the
+  adapter sets it to 1. The module imports scikit-learn at module level, so
+  the adapter imports it only when a mixture contains TreeSCM.
+- **Not corrected:** `data_prior_config.py` configures TreeSCM with
+  `tree_depth_lambda` and `tree_n_estimators_lambda`, but `TreeSCM.__init__`
+  reads `max_depth_lambda` and `n_estimators_lambda`. The configured values
+  fall into its `**kwargs` and the defaults (0.5) apply, as in the original.
 - **Empty `__init__.py`** files make the folders packages.
 
 Importing the prior prints `SyntaxWarning: invalid escape sequence`

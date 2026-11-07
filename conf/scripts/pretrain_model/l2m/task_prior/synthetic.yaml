@@ -1,0 +1,7 @@
+# @package _global_
+# L2M-synth: upstream's simulation prior. Every task has new features drawn
+# uniformly on [-2, 2], with only the dataset's feature count and independent
+# missing values, labelled with upstream's random BNN. Benchmark data is not
+# used. Tasks are made in the fit's own process.
+task_prior: synthetic
+task_workers: 0

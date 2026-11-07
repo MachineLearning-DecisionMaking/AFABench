@@ -15,4 +15,5 @@ methods:
   - aaco
   - aaco_nn
   - l2m
-  - l2m_tabicl_prior
+  - l2m_synth
+  - l2m_better_synth

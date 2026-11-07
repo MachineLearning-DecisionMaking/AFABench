@@ -1,0 +1,5 @@
+# @package _global_
+# L2M-real: tasks draw instances from the train split's features and label
+# them with upstream's random BNN. Tasks are made in the fit's own process.
+task_prior: real_pool
+task_workers: 0

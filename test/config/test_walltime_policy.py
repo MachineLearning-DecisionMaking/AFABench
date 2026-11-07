@@ -25,37 +25,54 @@ def test_arrhenius_l2m_training_limit_is_dataset_specific() -> None:
     site = yaml.safe_load(site_path.read_text())
     walltime = WalltimePolicy(
         site["walltime"],
-        methods={"l2m", "dime", "l2m_tabicl_prior"},
-        pretrained_models={"l2m", "l2m_tabicl_prior"},
+        methods={
+            "l2m",
+            "l2m_synth",
+            "l2m_better_synth",
+            "dime",
+        },
+        pretrained_models={
+            "l2m",
+            "l2m_synth",
+            "l2m_better_synth",
+        },
         datasets={"miniboone_subset", "metabric", "cube"},
     )
 
     assert walltime.minutes("train_method", "l2m", "miniboone_subset") == 480
     assert walltime.minutes("train_method", "l2m", "metabric") == 480
-    assert walltime.minutes("train_method", "l2m", "cube") == 240
+    # Not measured: an upper bound from l2m_official on miniboone_subset.
+    assert walltime.minutes("train_method", "l2m", "cube") == 720
     assert walltime.minutes("train_method", "dime", "miniboone_subset") == 240
-    assert walltime.minutes("pretrain_model", "l2m", "miniboone_subset") == 240
+    assert walltime.minutes("pretrain_model", "l2m", "miniboone_subset") == 480
     assert walltime.minutes("pretrain_model", "l2m", "metabric") == 480
 
 
-def test_arrhenius_l2m_tabicl_prior_limits_are_the_cube_upper_bounds() -> None:
+def test_arrhenius_l2m_runs_start_from_the_limits_of_l2m() -> None:
     site_path = (
         Path(__file__).resolve().parents[2]
         / "workflow/profiles/site/arrhenius/site.yaml"
     )
     site = yaml.safe_load(site_path.read_text())
+    runs = {"l2m", "l2m_synth", "l2m_better_synth"}
     walltime = WalltimePolicy(
         site["walltime"],
-        methods={"l2m", "l2m_tabicl_prior"},
-        pretrained_models={"l2m", "l2m_tabicl_prior"},
+        methods=runs,
+        pretrained_models=runs,
         datasets={"miniboone_subset", "metabric", "cube"},
     )
 
-    assert (
-        walltime.minutes("pretrain_model", "l2m_tabicl_prior", "cube") == 360
-    )
-    assert walltime.minutes("train_method", "l2m_tabicl_prior", "cube") == 720
-    assert walltime.minutes("pretrain_model", "l2m", "cube") == 240
+    for dataset in ("cube", "miniboone_subset", "metabric"):
+        for rule, name in (
+            ("train_method", "l2m"),
+            ("pretrain_model", "l2m"),
+        ):
+            # Not measured: the cube's upper bounds are 12 and 6 hours.
+            expected = walltime.minutes(rule, name, dataset)
+            assert walltime.minutes(rule, "l2m_synth", dataset) == expected
+            assert (
+                walltime.minutes(rule, "l2m_better_synth", dataset) == expected
+            )
 
 
 def test_walltime_uses_the_most_specific_available_limit() -> None:

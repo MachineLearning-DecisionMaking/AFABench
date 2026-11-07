@@ -12,6 +12,10 @@ The prior draws from the global `random`, numpy and torch generators, so
 every batch is generated under its own seed (`seeded_generators`). A batch's
 content then depends only on its seed, not on which process generates it
 or on what else uses the global generators.
+
+`TabICLPriorType` selects the sub-priors: the MLP and Gaussian-process bag
+(`prior_bag`) or one that includes TreeSCM, whose XGBoost and scikit-learn
+dependencies are imported only when it is used.
 """
 
 import logging
@@ -31,8 +35,14 @@ from torch.utils.data import DataLoader, Dataset
 
 from afabench.components.methods.discriminative.l2m.config import (
     UPSTREAM_CONTEXT_SET_SIZE,
+    TabICLPriorType,
 )
-from afabench.components.methods.discriminative.l2m.models import UpstreamBatch
+from afabench.components.methods.discriminative.l2m.models import (
+    UpstreamBatch,
+)
+from afabench.components.methods.discriminative.l2m.models import (
+    label_dim as upstream_label_dim,
+)
 from afabench.components.methods.discriminative.l2m.tabicl_v1_prior.data_prior_config import (
     get_prior_config,
 )
@@ -58,9 +68,24 @@ log = logging.getLogger(__name__)
 type TaskFeatures = Float[Tensor, "rows features"]
 type TaskLabels = Float[Tensor, "rows label_dim"]
 
-# The sub-priors' mixture of the TabICL v1 data loader (`generate_one_batch`):
-# an MLP structural causal model or a Gaussian process.
-_PRIOR_WEIGHTS = {"mlp": 0.961, "gp": 0.039}
+# The sub-priors' mixtures of the TabICL v1 data loader (`generate_one_batch`
+# and the `prior_bag_plus_tree` and `tree_only` variants of its generate
+# scripts): an MLP structural causal model, a Gaussian process, TreeSCM.
+_PRIOR_WEIGHTS: dict[TabICLPriorType, dict[str, float]] = {
+    TabICLPriorType.prior_bag: {"mlp": 0.961, "gp": 0.039},
+    TabICLPriorType.prior_bag_plus_tree: {
+        "mlp": 0.661,
+        "gp": 0.039,
+        "tree": 0.3,
+    },
+    TabICLPriorType.tree_only: {"tree": 1.0},
+}
+# The most classes the prior draws without a fixed class count.
+MAX_PRIOR_CLASSES = 10
+# Threads each TreeSCM tree model uses. The prior's own default is every CPU
+# of the machine, which oversubscribes it as soon as several task workers
+# generate tasks at once.
+_TREE_MODEL_THREADS = 1
 # The prior's own marker of a dataset without a usable train/test class
 # overlap, which it emits instead of redrawing.
 _INVALID_LABEL = -100
@@ -78,8 +103,16 @@ class TabICLTaskSampler(RealDataSampler):
     """
 
     def __init__(
-        self, *, n_features: int, n_classes: int, label_dim: int
+        self,
+        *,
+        n_features: int,
+        n_classes: int,
+        label_dim: int,
+        prior_type: TabICLPriorType = TabICLPriorType.prior_bag,
     ) -> None:
+        _check_prior_shape(
+            n_features=n_features, n_classes=n_classes, label_dim=label_dim
+        )
         dataset = TabularDataset(
             data=torch.empty(0, n_features),
             dim_y=label_dim,
@@ -90,7 +123,8 @@ class TabICLTaskSampler(RealDataSampler):
         super().__init__(dataset, dataset)
         self.n_features: int = n_features
         self.n_classes: int = n_classes
-        self.prior: BagPrior = _build_prior(n_features, n_classes)
+        self.prior_type: TabICLPriorType = prior_type
+        self.prior: BagPrior = _build_prior(n_features, n_classes, prior_type)
         self.rejections: Counter[str] = Counter()
 
     def draw_task(
@@ -168,6 +202,10 @@ class TabICLTaskSampler(RealDataSampler):
         if return_groups:
             msg = "The TabICL v1 task prior has no feature groups"
             raise NotImplementedError(msg)
+        if "tree" in _PRIOR_WEIGHTS[self.prior_type]:
+            # Set here rather than when the sampler is built, so that it
+            # holds in task worker processes, which import the module anew.
+            _limit_tree_model_threads()
         num_ctx = num_ctx or UPSTREAM_CONTEXT_SET_SIZE
         n_rows = num_ctx + (
             max_num_points - num_ctx if num_tar is None else num_tar
@@ -189,13 +227,46 @@ class TabICLTaskSampler(RealDataSampler):
         return batch
 
 
-def _build_prior(n_features: int, n_classes: int) -> BagPrior:
+def _check_prior_shape(
+    *, n_features: int, n_classes: int, label_dim: int
+) -> None:
+    """Reject sizes the prior cannot generate or the model cannot encode."""
+    if n_features < 1:
+        msg = f"n_features={n_features} must be at least 1"
+        raise ValueError(msg)
+    if not 2 <= n_classes <= MAX_PRIOR_CLASSES:
+        msg = (
+            f"n_classes={n_classes} must be between 2 and "
+            f"{MAX_PRIOR_CLASSES}, the class counts of the TabICL v1 prior"
+        )
+        raise ValueError(msg)
+    if label_dim != upstream_label_dim(n_classes):
+        msg = (
+            f"label_dim={label_dim} does not encode n_classes={n_classes}; "
+            f"upstream uses {upstream_label_dim(n_classes)}"
+        )
+        raise ValueError(msg)
+
+
+def _limit_tree_model_threads() -> None:
+    # Imported here: the module needs scikit-learn, and its trees XGBoost.
+    from afabench.components.methods.discriminative.l2m.tabicl_v1_prior.tabiclv1 import (  # noqa: PLC0415
+        treeSCM,
+    )
+
+    treeSCM.N_JOBS = _TREE_MODEL_THREADS
+
+
+def _build_prior(
+    n_features: int, n_classes: int, prior_type: TabICLPriorType
+) -> BagPrior:
     """
-    Build the prior of TabICL v1's `generate_one_batch`, with fixed sizes.
+    Build the `prior_type` mixture of TabICL v1's `generate_one_batch`.
 
     Padding is off: every dataset has exactly `n_features` features, which
     the vendored `fixed` feature sampler and `fixed_num_classes` option
-    (the two `L2M CHANGE` edits of the prior) request.
+    (the two `L2M CHANGE` edits of the prior) request. Only the sub-priors
+    of the mixture are built.
     """
     config: dict[str, Any] = cast(
         "dict[str, Any]",
@@ -207,15 +278,32 @@ def _build_prior(n_features: int, n_classes: int) -> BagPrior:
         "num_features_sampler": "fixed",
         "fixed_num_classes": n_classes,
     }
+    weights = _PRIOR_WEIGHTS[prior_type]
     base_priors: dict[str, Any] = {}
-    for name, prior_class in (("mlp", MLPPrior), ("gp", GPPrior)):
+    for name in weights:
         base_priors[name] = ClassificationAdapterPrior(
-            prior_class(config[name], batch_size_per_subgroup=1),
+            _sub_prior(name, config),
             num_features=n_features,
             padding=False,
             **classification,
         )
-    return BagPrior(base_priors=base_priors, prior_weights=_PRIOR_WEIGHTS)
+    return BagPrior(base_priors=base_priors, prior_weights=weights)
+
+
+def _sub_prior(name: str, config: dict[str, Any]) -> Any:  # noqa: ANN401
+    """One sub-prior of the mixture, imported only when it is used."""
+    if name == "mlp":
+        return MLPPrior(config["mlp"], batch_size_per_subgroup=1)
+    if name == "gp":
+        return GPPrior(config["gp"], batch_size_per_subgroup=1)
+    if name == "tree":
+        from afabench.components.methods.discriminative.l2m.tabicl_v1_prior.tabiclv1.treeSCM import (  # noqa: PLC0415
+            TreeSCMPrior,
+        )
+
+        return TreeSCMPrior(config["tree"], batch_size_per_subgroup=1)
+    msg = f"Unknown sub-prior {name!r}"
+    raise ValueError(msg)
 
 
 @contextmanager

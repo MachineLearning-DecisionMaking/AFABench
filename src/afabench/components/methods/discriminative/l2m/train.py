@@ -13,6 +13,7 @@ with the contract seed and packaged with the model as an
 `L2MAFAMethod`.
 """
 
+import logging
 from collections.abc import Callable
 
 import torch
@@ -22,6 +23,7 @@ from afabench.components.methods.discriminative.l2m.afa_methods import (
     require_direct_unmasker,
 )
 from afabench.components.methods.discriminative.l2m.config import (
+    UPSTREAM_CONTEXT_SET_SIZE,
     L2MTrainingConfig,
 )
 from afabench.components.methods.discriminative.l2m.models import (
@@ -46,6 +48,8 @@ from afabench.components.methods.discriminative.l2m.upstream_fit import (
 )
 from afabench.core.types import Features, Label
 from afabench.fit.inputs import FitInputs
+
+log = logging.getLogger(__name__)
 
 # The stage's own stream of seeded batches, apart from pretraining's.
 TRAINING_STREAM = 1
@@ -77,6 +81,7 @@ def train_l2m(
         train_dataset,
         model,
         task_prior=cfg.task_prior,
+        prior_type=cfg.prior_type,
         pool_size=cfg.pretraining_pool_size,
         sequence_length=cfg.sequence_length,
         seed=cfg.seed,
@@ -175,6 +180,19 @@ def _check_config(cfg: L2MTrainingConfig, inputs: FitInputs) -> None:
     if n_validation < 1:
         msg = f"The validation split has {n_validation} instances; need at least 1"
         raise ValueError(msg)
+    # Training query i attends to the 50 context instances and to the i
+    # labelled instances before it, so the queries cover a context set of
+    # sequence_length - 50 instances at most.
+    context_size = min(n_validation, cfg.context_set_size)
+    if cfg.sequence_length - UPSTREAM_CONTEXT_SET_SIZE < context_size:
+        log.warning(
+            "sequence_length=%d trains queries on at most %d labelled "
+            "instances before them, fewer than the %d of the stored "
+            "context set",
+            cfg.sequence_length,
+            cfg.sequence_length - UPSTREAM_CONTEXT_SET_SIZE,
+            context_size,
+        )
     n_selections = inputs.unmasker().get_n_selections(
         inputs.train_dataset().feature_shape
     )

@@ -1,0 +1,13 @@
+# @package _global_
+# Per-dataset L2M settings, for every task prior (task_prior/*.yaml); the
+# feature and class counts come from the dataset itself. Only these values
+# override ../config.yaml. A value that equals the default is repeated on
+# purpose, so that all of the dataset's settings are in this file; leaving it
+# out would change nothing.
+# MiniBooNE subset: 10 features, 2 classes (label_dim 1). The authors'
+# MiniBooNE config (configs/miniboone.yaml in reAIM-Lab/Learning-To-Measure
+# at the vendored commit), which is also the family default in config.yaml.
+sequence_length: 1000 # num_points
+pretraining_pool_size: 5000 # pool_size
+n_steps: 100000 # authors' num_steps is 50000
+batch_size: 8

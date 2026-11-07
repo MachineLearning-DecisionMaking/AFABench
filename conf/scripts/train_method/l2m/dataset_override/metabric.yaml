@@ -1,6 +1,13 @@
 # @package _global_
-# The authors' METABRIC config (configs/metabric.yaml in
-# reAIM-Lab/Learning-To-Measure at the vendored commit), where it differs
-# from the family default.
+# Per-dataset L2M settings, for every task prior (task_prior/*.yaml); the
+# feature and class counts come from the dataset itself. Only these values
+# override ../config.yaml. A value that equals the default is repeated on
+# purpose, so that all of the dataset's settings are in this file; leaving it
+# out would change nothing.
+# METABRIC: the authors' METABRIC config; its num_steps_afa is the family
+# default.
 sequence_length: 500 # num_points
 pretraining_pool_size: 1000 # pool_size
+n_steps: 50000 # num_steps_afa
+batch_size: 8 # batch_size_afa
+context_set_size: 900 # maximum; capped at the validation split size

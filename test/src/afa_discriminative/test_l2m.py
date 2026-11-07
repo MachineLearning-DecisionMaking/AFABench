@@ -1,5 +1,6 @@
 """The L2M fit stages and method, around the vendored code."""
 
+import logging
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from afabench.components.methods.discriminative.l2m.config import (
     L2MArchitectureConfig,
     L2MPretrainingConfig,
     L2MTrainingConfig,
+    TabICLPriorType,
     TaskPrior,
 )
 from afabench.components.methods.discriminative.l2m.models import (
@@ -27,16 +29,13 @@ from afabench.components.methods.discriminative.l2m.pretrain import (
 from afabench.components.methods.discriminative.l2m.train import (
     train_l2m,
 )
-from afabench.components.methods.discriminative.l2m.upstream_fit import (
-    draw_synthetic_pool,
-)
 from afabench.components.unmaskers.config import UnmaskerConfig
 from afabench.core.bundle_system.bundle import load_bundle, save_bundle
 from afabench.datasets import CubeDataset
 from afabench.fit.inputs import load_inputs
 from afabench.testing.provenance import placeholder_provenance
 
-# TODO: see if we need to adapt our model to this
+# TODO: this should be set per dataset that we train on
 N_FEATURES = 20
 N_CLASSES = 8
 # Every upstream task has 50 context instances, so a task needs more.
@@ -92,11 +91,13 @@ def _pretraining_config(
     train_dataset: CubeDataset | None = None,
     mixed_precision: bool = False,
     task_prior: TaskPrior = TaskPrior.real_pool,
+    prior_type: TabICLPriorType = TabICLPriorType.prior_bag,
     sequence_length: int = SEQUENCE_LENGTH,
 ) -> L2MPretrainingConfig:
     return L2MPretrainingConfig(
         **_contract_values(tmp_path, train_dataset),  # pyright: ignore[reportArgumentType]
         task_prior=task_prior,
+        prior_type=prior_type,
         task_workers=0,
         architecture=L2MArchitectureConfig(
             model_dim=8,
@@ -139,11 +140,14 @@ def _training_config(
     *,
     hard_budget: int | None = 3,
     task_prior: TaskPrior = TaskPrior.real_pool,
+    prior_type: TabICLPriorType = TabICLPriorType.prior_bag,
     sequence_length: int = SEQUENCE_LENGTH,
+    context_set_size: int = 8,
 ) -> L2MTrainingConfig:
     return L2MTrainingConfig(
         **_contract_values(tmp_path),  # pyright: ignore[reportArgumentType]
         task_prior=task_prior,
+        prior_type=prior_type,
         task_workers=0,
         method_name="l2m",
         pretrained_model_bundle_path=_save(
@@ -161,7 +165,7 @@ def _training_config(
         n_validation_tasks=2,
         pretraining_pool_size=64,
         mixed_precision=False,
-        context_set_size=8,
+        context_set_size=context_set_size,
     )
 
 
@@ -243,20 +247,6 @@ def test_pretraining_requires_a_train_split_that_fills_a_task(
         pretrain_l2m(cfg, inputs=load_inputs(cfg))
 
 
-def test_synthetic_pool_is_uniform_on_the_box_and_seeded() -> None:
-    pool = draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=4)
-
-    assert pool.shape == (500, N_FEATURES)
-    assert pool.min() >= -2.0
-    assert pool.max() <= 2.0
-    assert torch.equal(
-        pool, draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=4)
-    )
-    assert not torch.equal(
-        pool, draw_synthetic_pool(size=500, n_features=N_FEATURES, seed=5)
-    )
-
-
 def test_synthetic_pretraining_ignores_the_train_split_data(
     tmp_path: Path,
 ) -> None:
@@ -267,7 +257,7 @@ def test_synthetic_pretraining_ignores_the_train_split_data(
         cfg = _pretraining_config(
             tmp_path / name,
             train_dataset=train_dataset,
-            task_prior=TaskPrior.synthetic_pool,
+            task_prior=TaskPrior.synthetic,
         )
         models.append(pretrain_l2m(cfg, inputs=load_inputs(cfg)))
 
@@ -277,13 +267,13 @@ def test_synthetic_pretraining_ignores_the_train_split_data(
         assert torch.equal(first, second)
 
 
-def test_synthetic_pretraining_needs_no_full_task_in_the_train_split(
+def test_synthetic_pretraining_needs_no_pool(
     tmp_path: Path,
 ) -> None:
     cfg = _pretraining_config(
         tmp_path,
         train_dataset=CubeDataset(n_samples=SEQUENCE_LENGTH - 1, seed=0),
-        task_prior=TaskPrior.synthetic_pool,
+        task_prior=TaskPrior.synthetic,
     )
 
     model = pretrain_l2m(cfg, inputs=load_inputs(cfg))
@@ -292,7 +282,7 @@ def test_synthetic_pretraining_needs_no_full_task_in_the_train_split(
 
 
 def test_synthetic_training_returns_a_method(tmp_path: Path) -> None:
-    cfg = _training_config(tmp_path, task_prior=TaskPrior.synthetic_pool)
+    cfg = _training_config(tmp_path, task_prior=TaskPrior.synthetic)
 
     method = train_l2m(cfg, inputs=load_inputs(cfg))
 
@@ -341,10 +331,126 @@ def test_tabicl_training_returns_a_method(tmp_path: Path) -> None:
     assert method.context_labels.shape == (8, N_CLASSES)
 
 
+def test_tree_prior_pretraining_and_training_run_on_cpu(
+    tmp_path: Path,
+) -> None:
+    """L2M-better-synth: the TabICL v1 prior with TreeSCM, in both stages."""
+    pretraining = _pretraining_config(
+        tmp_path,
+        task_prior=TaskPrior.tabicl_v1,
+        prior_type=TabICLPriorType.prior_bag_plus_tree,
+        sequence_length=TABICL_SEQUENCE_LENGTH,
+    )
+    model = pretrain_l2m(pretraining, inputs=load_inputs(pretraining))
+    assert (model.n_features, model.n_classes) == (N_FEATURES, N_CLASSES)
+
+    training = _training_config(
+        tmp_path,
+        task_prior=TaskPrior.tabicl_v1,
+        prior_type=TabICLPriorType.prior_bag_plus_tree,
+        sequence_length=TABICL_SEQUENCE_LENGTH,
+    )
+    method = train_l2m(training, inputs=load_inputs(training))
+
+    assert method.context_labels.shape == (8, N_CLASSES)
+
+
+def test_the_sub_priors_change_the_tabicl_tasks(tmp_path: Path) -> None:
+    models = []
+    for prior_type in (
+        TabICLPriorType.prior_bag,
+        TabICLPriorType.tree_only,
+    ):
+        (tmp_path / prior_type.value).mkdir()
+        cfg = _pretraining_config(
+            tmp_path / prior_type.value,
+            task_prior=TaskPrior.tabicl_v1,
+            prior_type=prior_type,
+            sequence_length=TABICL_SEQUENCE_LENGTH,
+        )
+        models.append(pretrain_l2m(cfg, inputs=load_inputs(cfg)))
+
+    assert any(
+        not torch.equal(first, second)
+        for first, second in zip(
+            models[0].parameters(), models[1].parameters(), strict=True
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "task_prior", [TaskPrior.real_pool, TaskPrior.synthetic]
+)
+@pytest.mark.parametrize(
+    "prior_type",
+    [TabICLPriorType.prior_bag_plus_tree, TabICLPriorType.tree_only],
+)
+def test_a_tabicl_sub_prior_needs_the_tabicl_task_prior(
+    tmp_path: Path, task_prior: TaskPrior, prior_type: TabICLPriorType
+) -> None:
+    with pytest.raises(
+        ValueError, match="only applies to task_prior=tabicl_v1"
+    ):
+        _pretraining_config(
+            tmp_path, task_prior=task_prior, prior_type=prior_type
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("batch_size", 0, "batch_size=0 must be at least 1"),
+        ("checkpoint_interval", 0, "checkpoint_interval=0 must be at least 1"),
+        ("n_validation_tasks", 0, "n_validation_tasks=0 must be at least 1"),
+    ],
+)
+def test_degenerate_fit_settings_fail_loudly(
+    tmp_path: Path, field: str, value: int, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        replace(_pretraining_config(tmp_path), **{field: value})
+    with pytest.raises(ValueError, match=match):
+        replace(_training_config(tmp_path), **{field: value})
+
+
+def test_training_rejects_a_model_for_other_dataset_shapes(
+    tmp_path: Path,
+) -> None:
+    cfg = _training_config(tmp_path)
+    other_model = _small_model(N_FEATURES - 1, N_CLASSES)
+    cfg = replace(
+        cfg,
+        pretrained_model_bundle_path=_save(
+            other_model, tmp_path / "other.bundle"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="The pretrained model has 19"):
+        train_l2m(cfg, inputs=load_inputs(cfg))
+
+
+def test_training_warns_when_tasks_do_not_reach_the_context_set_size(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    short = _training_config(tmp_path, context_set_size=10)
+    covered = _training_config(tmp_path, context_set_size=6)
+
+    with caplog.at_level(logging.WARNING):
+        train_l2m(covered, inputs=load_inputs(covered))
+        assert "sequence_length" not in caplog.text
+        train_l2m(short, inputs=load_inputs(short))
+
+    assert (
+        f"sequence_length={SEQUENCE_LENGTH} trains queries on at most 6"
+        in (caplog.text)
+    )
+
+
 @pytest.mark.parametrize(
     ("task_prior", "task_workers", "pool_size", "match"),
     [
         (TaskPrior.real_pool, 2, 64, "task_workers=2 has no effect"),
+        (TaskPrior.synthetic, 2, 64, "task_workers=2 has no effect"),
         (TaskPrior.tabicl_v1, -1, 64, "task_workers=-1 must not be negative"),
         (TaskPrior.real_pool, 0, SEQUENCE_LENGTH - 1, "pretraining_pool_size"),
     ],
@@ -363,6 +469,20 @@ def test_task_settings_are_validated(
             task_workers=task_workers,
             pretraining_pool_size=pool_size,
         )
+
+
+@pytest.mark.parametrize(
+    "task_prior", [TaskPrior.synthetic, TaskPrior.tabicl_v1]
+)
+def test_priors_without_a_pool_ignore_its_size(
+    tmp_path: Path, task_prior: TaskPrior
+) -> None:
+    cfg = replace(
+        _pretraining_config(tmp_path, task_prior=task_prior),
+        pretraining_pool_size=1,
+    )
+
+    assert cfg.pretraining_pool_size == 1
 
 
 def test_tabicl_prior_needs_no_pool_and_allows_workers(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 
 from afabench.components.methods.discriminative.l2m.config import (
     L2MTrainingConfig,
+    TaskPrior,
 )
 from afabench.components.methods.discriminative.l2m.train import (
     train_l2m,
@@ -28,7 +29,7 @@ def main(cfg: L2MTrainingConfig) -> None:
         # Every task has 50 context instances, the sampler's own default.
         # The TabICL v1 prior rejects nearly every draw with 8 classes in
         # fewer than about 100 instances.
-        sequence_length=64 if cfg.task_prior.uses_pool else 100,
+        sequence_length=100 if cfg.task_prior is TaskPrior.tabicl_v1 else 64,
         pretraining_pool_size=64,
         task_workers=0,
         n_steps=2,

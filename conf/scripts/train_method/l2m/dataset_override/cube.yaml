@@ -1,0 +1,13 @@
+# @package _global_
+# Per-dataset L2M settings, for every task prior (task_prior/*.yaml); the
+# feature and class counts come from the dataset itself. Only these values
+# override ../config.yaml. A value that equals the default is repeated on
+# purpose, so that all of the dataset's settings are in this file; leaving it
+# out would change nothing.
+# CUBE: see the pretraining config. The context set is the whole validation
+# split, 200 instances.
+sequence_length: 600
+pretraining_pool_size: 600 # the whole train split
+n_steps: 50000
+batch_size: 8
+context_set_size: 900 # maximum; capped at the validation split size

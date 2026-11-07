@@ -82,9 +82,6 @@ def test_no_method_runs_metabric_in_the_soft_budget_setting(
     on_metabric = {
         method: per_dataset["metabric"]
         for method, per_dataset in settings.budget_params.items()
-        # l2m_tabicl_prior is trained for the cube's shapes and ignores the
-        # other datasets.
-        if method != "l2m_tabicl_prior"
     }
     for method, combinations in on_metabric.items():
         assert combinations, method
@@ -105,33 +102,55 @@ def test_l2m_trains_one_policy_for_every_metabric_hard_budget(
     assert {train for train, _, _, _ in combinations} == {7}
 
 
-def test_l2m_tabicl_prior_runs_only_on_the_cube_with_one_trained_policy() -> (
-    None
-):
+L2M_RUNS = {
+    "l2m": "",
+    "l2m_synth": "task_prior=synthetic",
+    "l2m_better_synth": "task_prior=tabicl_v1 prior_type=prior_bag_plus_tree",
+}
+
+
+@pytest.mark.parametrize(("method", "params"), L2M_RUNS.items())
+def test_each_l2m_run_trains_one_policy_per_dataset_for_every_budget(
+    method: str, params: str
+) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         settings = load_config(_shipped_all_profile("all"))
 
     runs = {
         dataset: combinations
-        for dataset, combinations in settings.budget_params[
-            "l2m_tabicl_prior"
-        ].items()
+        for dataset, combinations in settings.budget_params[method].items()
         if combinations
     }
-    assert set(runs) == {"cube"}
-    assert {train for train, _, _, _ in runs["cube"]} == {10}
-    # Both stages generate their tasks from the same prior and task size.
-    prior_params = "task_prior=tabicl_v1 sequence_length=250 task_workers=4"
-    assert (
-        settings.pretraining_script("l2m_tabicl_prior").script_params
-        == prior_params
-    )
-    assert (
-        settings.training_script("l2m_tabicl_prior").script_params
-        == prior_params
-    )
-    assert settings.training_script("l2m").script_params == ""
+    # The model's width is fixed by the dataset: one model per dataset.
+    assert set(runs) == {"cube", "miniboone_subset", "metabric"}
+    trained_at = {
+        dataset: {train for train, _, _, _ in combinations}
+        for dataset, combinations in runs.items()
+    }
+    assert trained_at == {
+        "cube": {10},
+        "miniboone_subset": {7},
+        "metabric": {7},
+    }
+    # The task prior is the only difference between the runs, and both
+    # stages use the same one.
+    assert settings.pretraining_script(method).script_params == params
+    assert settings.training_script(method).script_params == params
+    assert settings.pretraining_script(method).script_name == "l2m"
+    assert settings.training_script(method).script_name == "l2m"
+
+
+def test_the_l2m_runs_have_their_own_pretrained_models() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        settings = load_config(_shipped_all_profile("all"))
+
+    runs = list(L2M_RUNS)
+    # A model trained on one task prior is not another run's model.
+    assert {
+        settings.method_to_pretrained_model[method] for method in runs
+    } == set(runs)
 
 
 def test_load_config_uses_pipeline_defaults() -> None:

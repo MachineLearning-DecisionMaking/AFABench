@@ -78,6 +78,11 @@ method_options:
       cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist,
       imagenette, miniboone, miniboone_subset, mnist, physionet_challenge_2012,
       synthetic_mnist, synthetic_mnist_without_noise]
+  # The three L2M runs (docs/reference/l2m.md) differ in their task prior
+  # only. Their model width is fixed by the dataset's feature and class
+  # counts, so each dataset trains its own model, and every other
+  # per-dataset value is in the dataset_override files of
+  # conf/scripts/{pretrain_model,train_method}/l2m/.
   l2m:
     pretrained_model_name: "l2m"
     train_script_name: "l2m"
@@ -86,26 +91,42 @@ method_options:
     # results.
     eval_batch_size:
       default: 128
-    # Hard-budget setting on miniboone_subset and metabric only. L2M has no stop action
-    # and its policy training does not depend on the budget, so one trained
-    # policy serves every evaluation budget.
-    train_hard_budget: {miniboone_subset: 7, metabric: 7}
-    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
-  # L2M trained only on the TabICL v1 prior with the cube's 20 features and
-  # 8 classes (docs/explanation/l2m_tabicl_prior.md): the model cannot
-  # evaluate on any other dataset, and a task's 200 query instances follow its
-  # 50 context instances. Both stages generate tasks in 4 worker processes.
-  l2m_tabicl_prior:
-    pretrained_model_name: "l2m_tabicl_prior"
+    # Hard-budget setting on cube, miniboone_subset and metabric only. L2M
+    # has no stop action and its policy training does not depend on the
+    # budget, so one trained policy serves every evaluation budget; the
+    # budget must stay below the dataset's number of selections.
+    train_hard_budget: {cube: 10, miniboone_subset: 7, metabric: 7}
+    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
+  l2m_synth:
+    pretrained_model_name: "l2m_synth"
     train_script_name: "l2m"
-    method_specific_params:
-      ["task_prior=tabicl_v1", "sequence_length=250", "task_workers=4"]
+    method_specific_params: ["task_prior=synthetic"]
+    # Query instances attend to the stored context set only, never to each
+    # other, so the batch size is a throughput knob only and does not change
+    # results.
     eval_batch_size:
       default: 128
-    # As l2m: one trained policy serves every evaluation budget, and the
-    # train hard budget must be below the cube's 20 selections.
-    train_hard_budget: {cube: 10}
-    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, metabric, miniboone, miniboone_subset, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
+    # Hard-budget setting on cube, miniboone_subset and metabric only. L2M
+    # has no stop action and its policy training does not depend on the
+    # budget, so one trained policy serves every evaluation budget; the
+    # budget must stay below the dataset's number of selections.
+    train_hard_budget: {cube: 10, miniboone_subset: 7, metabric: 7}
+    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
+  l2m_better_synth:
+    pretrained_model_name: "l2m_better_synth"
+    train_script_name: "l2m"
+    method_specific_params: ["task_prior=tabicl_v1", "prior_type=prior_bag_plus_tree"]
+    # Query instances attend to the stored context set only, never to each
+    # other, so the batch size is a throughput knob only and does not change
+    # results.
+    eval_batch_size:
+      default: 128
+    # Hard-budget setting on cube, miniboone_subset and metabric only. L2M
+    # has no stop action and its policy training does not depend on the
+    # budget, so one trained policy serves every evaluation budget; the
+    # budget must stay below the dataset's number of selections.
+    train_hard_budget: {cube: 10, miniboone_subset: 7, metabric: 7}
+    hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
   cae:
     train_script_name: "cae"
     train_hard_budget: {cube_nonuniform_costs: 20}

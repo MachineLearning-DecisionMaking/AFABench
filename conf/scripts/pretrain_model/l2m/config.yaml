@@ -10,6 +10,7 @@ defaults:
   - initializer: ???
   - unmasker: ???
   - dataset_key: ???
+  - task_prior: real_pool
   - _self_
   - optional dataset_override@_global_: ${dataset_key}
   - override hydra/job_logging: output_dir_colorlog
@@ -18,16 +19,20 @@ defaults:
 
 # The authors' MiniBooNE config (configs/miniboone.yaml in
 # reAIM-Lab/Learning-To-Measure at the vendored commit), the family default.
-# dataset_override/<dataset_key>.yaml applies the authors' dataset config.
+# dataset_override/<dataset_key>.yaml sets every per-dataset value.
+#
+# task_prior/<name>.yaml (select with task_prior=<name>) sets task_prior and
+# task_workers. real_pool: tasks draw instances from a pool of the train
+# split's features; synthetic: every task has new uniform features on
+# [-2, 2] with only the dataset's feature count (upstream's simulation
+# prior); both label them with upstream's random BNN. tabicl_v1: the TabICL
+# v1 prior generates features and labels with the dataset's feature and
+# class counts (task_workers processes generate them ahead of use).
+# pretraining_pool_size is read only by real_pool.
 
-# real_pool: tasks draw instances from the train split's features;
-# synthetic_pool: from uniform draws on [-2, 2] with only the dataset's
-# feature count (see make_task_sampler); both label them with upstream's
-# random BNN. tabicl_v1: the TabICL v1 prior generates features and labels
-# with the dataset's feature and class counts (task_workers processes
-# generate them ahead of use; pretraining_pool_size is then unused).
-task_prior: real_pool
-task_workers: 0
+# The TabICL v1 prior's sub-priors: prior_bag (MLP and Gaussian process),
+# prior_bag_plus_tree (adds TreeSCM) or tree_only. Read only with tabicl_v1.
+prior_type: prior_bag
 architecture:
   model_dim: 256 # d_model
   embedding_depth: 4 # emb_depth

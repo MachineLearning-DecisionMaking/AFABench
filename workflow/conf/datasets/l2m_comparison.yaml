@@ -1,0 +1,4 @@
+datasets:
+  - cube
+  - miniboone_subset
+  - metabric

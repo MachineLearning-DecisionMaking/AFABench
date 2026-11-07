@@ -36,17 +36,25 @@ pretrain_mapping:
     pretrain_script_name: "dime"
     pretrain_params: []
 
+  # The L2M runs differ in their task prior only. Everything that depends on
+  # the dataset (task size, steps, pool) is in the dataset_override files of
+  # conf/scripts/pretrain_model/l2m/; see docs/reference/l2m.md.
+  #
+  # L2M-real: tasks from the train split's features.
   l2m:
     pretrain_script_name: "l2m"
     pretrain_params: []
 
-  # L2M on tasks from the TabICL v1 prior with the cube's 20 features and 8
-  # classes, 200 query instances after the 50 context instances of a task
-  # (see docs/explanation/l2m_tabicl_prior.md).
-  l2m_tabicl_prior:
+  # L2M-synth: tasks from upstream's simulated features, no benchmark data.
+  l2m_synth:
+    pretrain_script_name: "l2m"
+    pretrain_params: ["task_prior=synthetic"]
+
+  # L2M-better-synth: tasks from the TabICL v1 prior with TreeSCM.
+  l2m_better_synth:
     pretrain_script_name: "l2m"
     pretrain_params:
-      ["task_prior=tabicl_v1", "sequence_length=250", "task_workers=4"]
+      ["task_prior=tabicl_v1", "prior_type=prior_bag_plus_tree"]
 
   # Example: If you need a variant with specific parameters
   # pvae_custom:

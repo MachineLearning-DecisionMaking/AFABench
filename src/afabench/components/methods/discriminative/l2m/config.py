@@ -12,21 +12,44 @@ class TaskPrior(StrEnum):
     """
     The task prior an L2M fit stage draws its tasks from; values are names.
 
-    The pool priors draw a task's instances from a pretraining pool and
-    label them with upstream's random BNN. `tabicl_v1` generates features and
-    labels together, with no pool.
+    `real_pool` draws a task's instances from a pretraining pool and labels
+    them with upstream's random BNN. `synthetic` draws new features for every
+    task, as upstream's simulation does, and labels them the same way.
+    `tabicl_v1` generates features and labels together.
     """
 
-    # The train split's features.
+    # A pool of the train split's features.
     real_pool = "real_pool"
-    # Uniform draws on a box, with only the dataset's feature count.
-    synthetic_pool = "synthetic_pool"
+    # Uniform draws on [-2, 2] for every task, with only the dataset's
+    # feature count (`SyntheticTaskSampler`).
+    synthetic = "synthetic"
     # The TabICL v1 prior, with the dataset's feature and class counts.
     tabicl_v1 = "tabicl_v1"
 
     @property
     def uses_pool(self) -> bool:
-        return self is not TaskPrior.tabicl_v1
+        return self is TaskPrior.real_pool
+
+    @property
+    def uses_workers(self) -> bool:
+        """Whether tasks are slow enough to generate ahead of use."""
+        return self is TaskPrior.tabicl_v1
+
+
+class TabICLPriorType(StrEnum):
+    """
+    The sub-priors the TabICL v1 task prior mixes; values are names.
+
+    The names and weights are those of the TabICL v1 data loader's
+    `prior_bag`, `prior_bag_plus_tree` and `tree_only`.
+    """
+
+    # MLP structural causal model 96.1 %, Gaussian process 3.9 %.
+    prior_bag = "prior_bag"
+    # MLP 66.1 %, Gaussian process 3.9 %, TreeSCM (XGBoost trees) 30 %.
+    prior_bag_plus_tree = "prior_bag_plus_tree"
+    # TreeSCM only.
+    tree_only = "tree_only"
 
 
 # `RealDataSampler.sample` always gives a task this many context instances
@@ -37,11 +60,29 @@ UPSTREAM_CONTEXT_SET_SIZE = 50
 def _check_task_shape(
     *,
     task_prior: TaskPrior,
+    prior_type: TabICLPriorType,
     sequence_length: int,
     pretraining_pool_size: int,
     n_validation_tasks: int,
     task_workers: int,
+    batch_size: int,
+    checkpoint_interval: int,
 ) -> None:
+    if batch_size < 1:
+        msg = f"batch_size={batch_size} must be at least 1"
+        raise ValueError(msg)
+    if checkpoint_interval < 1:
+        msg = f"checkpoint_interval={checkpoint_interval} must be at least 1"
+        raise ValueError(msg)
+    # Only the TabICL v1 prior has sub-priors to choose from.
+    if prior_type is not TabICLPriorType.prior_bag and (
+        task_prior is not TaskPrior.tabicl_v1
+    ):
+        msg = (
+            f"prior_type={prior_type.value} only applies to "
+            f"task_prior=tabicl_v1, not task_prior={task_prior.value}"
+        )
+        raise ValueError(msg)
     if sequence_length <= UPSTREAM_CONTEXT_SET_SIZE:
         msg = (
             f"sequence_length={sequence_length} must exceed the "
@@ -62,8 +103,7 @@ def _check_task_shape(
     if task_workers < 0:
         msg = f"task_workers={task_workers} must not be negative"
         raise ValueError(msg)
-    # Only the TabICL v1 prior is slow enough to generate ahead of use.
-    if task_workers and task_prior.uses_pool:
+    if task_workers and not task_prior.uses_workers:
         msg = (
             f"task_workers={task_workers} has no effect with "
             f"task_prior={task_prior.value}; only tabicl_v1 generates "
@@ -89,6 +129,8 @@ class L2MArchitectureConfig:
 @dataclass(frozen=True, kw_only=True)
 class L2MPretrainingConfig(PretrainingContract):
     task_prior: TaskPrior
+    # The TabICL v1 prior's sub-priors; read only with `tabicl_v1`.
+    prior_type: TabICLPriorType
     # Processes generating tasks ahead of use; 0 generates them in the fit.
     task_workers: int
     architecture: L2MArchitectureConfig
@@ -108,10 +150,13 @@ class L2MPretrainingConfig(PretrainingContract):
     def __post_init__(self) -> None:
         _check_task_shape(
             task_prior=self.task_prior,
+            prior_type=self.prior_type,
             sequence_length=self.sequence_length,
             pretraining_pool_size=self.pretraining_pool_size,
             n_validation_tasks=self.n_validation_tasks,
             task_workers=self.task_workers,
+            batch_size=self.batch_size,
+            checkpoint_interval=self.checkpoint_interval,
         )
 
 
@@ -120,8 +165,10 @@ store_contract_config(name="pretrain_l2m", config_class=L2MPretrainingConfig)
 
 @dataclass(frozen=True, kw_only=True)
 class L2MTrainingConfig(TrainingContract):
-    # The pretrained model's task prior, and its worker processes.
+    # The pretrained model's task prior, its TabICL v1 sub-priors and its
+    # worker processes.
     task_prior: TaskPrior
+    prior_type: TabICLPriorType
     task_workers: int
     # Tasks per step, and instances per task.
     batch_size: int
@@ -142,10 +189,13 @@ class L2MTrainingConfig(TrainingContract):
     def __post_init__(self) -> None:
         _check_task_shape(
             task_prior=self.task_prior,
+            prior_type=self.prior_type,
             sequence_length=self.sequence_length,
             pretraining_pool_size=self.pretraining_pool_size,
             n_validation_tasks=self.n_validation_tasks,
             task_workers=self.task_workers,
+            batch_size=self.batch_size,
+            checkpoint_interval=self.checkpoint_interval,
         )
         if self.context_set_size < 1:
             msg = (

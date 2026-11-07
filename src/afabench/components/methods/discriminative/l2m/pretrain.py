@@ -63,6 +63,7 @@ def pretrain_l2m(
         train_dataset,
         model,
         task_prior=cfg.task_prior,
+        prior_type=cfg.prior_type,
         pool_size=cfg.pretraining_pool_size,
         sequence_length=cfg.sequence_length,
         seed=cfg.seed,

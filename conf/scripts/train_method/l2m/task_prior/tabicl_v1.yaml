@@ -1,0 +1,7 @@
+# @package _global_
+# L2M-better-synth: the TabICL v1 prior generates each
+# task's features and labels with the dataset's feature and class counts;
+# `prior_type` chooses its sub-priors. Four processes generate tasks ahead
+# of use.
+task_prior: tabicl_v1
+task_workers: 4

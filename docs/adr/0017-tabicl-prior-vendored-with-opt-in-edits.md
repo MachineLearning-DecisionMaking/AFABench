@@ -5,9 +5,9 @@ status: accepted
 # The TabICL v1 prior is vendored with two opt-in edits that change what it computes
 
 L2M's tasks come from a task prior ([CONTEXT.md](../../CONTEXT.md)). The
-pool task priors draw a task's instances from the train split's features
-and label them with upstream's random BNN, so the tasks resemble the
-dataset only through its features. The `l2m_tabicl_prior` variant instead
+real-pool task prior draws a task's instances from the train split's
+features and labels them with upstream's random BNN, so the tasks resemble the
+dataset only through its features. The `l2m_better_synth` run instead
 trains on tasks from the TabICL v1 prior, which generates whole
 classification datasets, features and labels, and shares nothing with the
 benchmark's datasets. Its tasks must have the model's exact feature count
@@ -34,6 +34,19 @@ entries the prior computes what the original does.
   `utils_torch.py` to the four functions the prior imports and the helpers
   they call, so the prior needs neither `wandb` nor Mother-Tree's training
   code. The folder's README lists every edit.
+- **TreeSCM is a third sub-prior, chosen by `prior_type`.** TabICL v1's
+  data loader also mixes in TreeSCM, a structural causal model whose layers
+  are fitted XGBoost trees: `prior_bag_plus_tree` (MLP 66.1 %, Gaussian
+  process 3.9 %, TreeSCM 30 %) and `tree_only`. It is vendored as
+  `tabiclv1/treeSCM.py` with `PATCH(afabench)` edits only: its import path,
+  its XGBoost import moved into the branch that uses it (the original's
+  module-level import was commented out, so its default tree model raised
+  `NameError`), and its trees' thread count, which the original sets to
+  every CPU of the machine, made a module constant. The task sampler
+  builds only the sub-priors of the chosen mixture and sets that constant
+  to 1, so that parallelism comes from the task workers and a run without
+  TreeSCM imports neither it, scikit-learn's trees nor XGBoost. The default
+  `prior_bag` computes what the earlier two-sub-prior mixture did.
 
 ## Considered options
 
@@ -56,6 +69,17 @@ entries the prior computes what the original does.
 - A new dependency, `gpytorch` (with `linear-operator`), both pure-Python
   wheels, so the aarch64 environment needs no build. `scipy` is now
   declared; it was already installed through scikit-learn.
+- TreeSCM adds `xgboost-cpu`, the CPU-only build of XGBoost (module
+  `xgboost`), which has wheels for x86_64 and aarch64 Linux and for Windows.
+  The prior runs on the CPU, and `xgboost` itself would add NVIDIA's NCCL
+  wheel to every Linux environment. scikit-learn was already declared. Any
+  `uv.lock` change needs a rebuild of the cluster venvs
+  ([ADR 0015](0015-one-venv-per-architecture.md)).
+- TreeSCM's config in `data_prior_config.py` names `tree_depth_lambda` and
+  `tree_n_estimators_lambda`, but `TreeSCM.__init__` reads
+  `max_depth_lambda` and `n_estimators_lambda`; the configured values reach
+  `**kwargs` and are ignored, so the defaults (0.5) apply. This is the
+  original's behaviour and is kept.
 - The prior draws from the global `random`, numpy and torch generators, so
   the adapter seeds them per batch and restores them. A batch's content then
   depends only on its seed, not on which process generates it.

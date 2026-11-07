@@ -385,7 +385,9 @@ soft_budget_params:
   # Hard-budget setting only; the schema requires an entry regardless.
   l2m:
     default: []
-  l2m_tabicl_prior:
+  l2m_synth:
+    default: []
+  l2m_better_synth:
     default: []
   random_dummy:
     default:
