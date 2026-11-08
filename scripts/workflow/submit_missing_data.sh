@@ -32,7 +32,7 @@ for group in core_group induced_nonuniform induced_real; do
     base="rebuttal_imputers_${group}"
     DEPENDENCIES+=("${base}:")
     for experiment in sklearn_imputers constant_fill pvae_variants mice_label \
-        multi_draw view_classifier; do
+        multi_draw mar mnar_self view_classifier; do
         DEPENDENCIES+=("rebuttal_${experiment}_${group}:${base}")
     done
     DEPENDENCIES+=(
