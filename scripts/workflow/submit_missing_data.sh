@@ -78,7 +78,7 @@ for entry in "${DEPENDENCIES[@]}"; do
 
     # Profiles share the repository, so each Snakemake skips the directory
     # lock; dependencies keep two runs from writing the same namespace.
-    run="scripts/workflow/run_missing_data.sh --profile ${profile} ${RUN_ARGS:---device cuda --cores 72 --mem-mb 103680 --gpu-workers 34 --mps} -- --nolock --rerun-triggers mtime --rerun-incomplete"
+    run="scripts/workflow/run_missing_data.sh --profile ${profile} ${RUN_ARGS:---device cuda --cores 72 --mem-mb 103680 --gpu-workers 34 --mps} -- --nolock --keep-going --rerun-triggers mtime --rerun-incomplete"
     after=()
     for need in ${needs[@]+"${needs[@]}"}; do
         id="job_${need}"
