@@ -1,0 +1,13 @@
+methods: [aaco, dime, ol_with_mask, ol_full_state]
+strategies: [pvae_label_free, pvae_oracle]
+include_complete_data: false
+include_method_variants: true
+
+missingness:
+  mechanisms: [mcar]
+  probabilities: [0.7]
+
+missing_data_pretrain_reuse:
+  pvae:
+    complete: oracle_restoration_pvae
+    restricted: incomplete_restoration_pvae

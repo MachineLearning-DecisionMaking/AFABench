@@ -31,8 +31,8 @@ done
 for group in core_group induced_nonuniform induced_real; do
     base="rebuttal_imputers_${group}"
     DEPENDENCIES+=("${base}:")
-    for experiment in sklearn_imputers constant_fill mice_label multi_draw \
-        view_classifier; do
+    for experiment in sklearn_imputers constant_fill pvae_variants mice_label \
+        multi_draw view_classifier; do
         DEPENDENCIES+=("rebuttal_${experiment}_${group}:${base}")
     done
     DEPENDENCIES+=(

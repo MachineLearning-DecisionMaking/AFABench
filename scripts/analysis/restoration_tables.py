@@ -543,6 +543,12 @@ def main() -> None:
             "multi_draw_core_group",
             "multi_draw_induced_real",
             "multi_draw_induced_nonuniform",
+            "constant_fill_core_group",
+            "constant_fill_induced_real",
+            "constant_fill_induced_nonuniform",
+            "pvae_variants_core_group",
+            "pvae_variants_induced_real",
+            "pvae_variants_induced_nonuniform",
         ],
     )
     arguments = parser.parse_args()
