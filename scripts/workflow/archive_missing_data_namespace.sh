@@ -35,13 +35,17 @@ done
 }
 [[ -n ${archive_dir} && -d ${root} ]] || usage
 
-root=$(realpath -e "${root}")
+# GNU tar and coreutils, as on the cluster; Homebrew provides both on macOS.
+tar=$(command -v gtar || command -v tar)
+sha256=(sha256sum)
+command -v sha256sum >/dev/null || sha256=(shasum -a 256)
+root=$(cd "${root}" && pwd -P)
 [[ ${root} != / ]] || {
     echo "refusing filesystem root as --root" >&2
     exit 2
 }
 mkdir -p "${archive_dir}"
-archive_dir=$(realpath -e "${archive_dir}")
+archive_dir=$(cd "${archive_dir}" && pwd -P)
 archive="${archive_dir}/missing-data-${namespace}.tar.zst"
 manifest="${archive}.manifest.txt"
 [[ ! -e ${archive} && ! -e ${manifest} ]] || {
@@ -73,16 +77,16 @@ while IFS= read -r -d '' source_root; do
     source_entries=$((source_entries + count))
 done < "${roots}"
 
-tar --create --zstd --file="${temporary}" --directory="${root}" \
+"${tar}" --create --zstd --file="${temporary}" --directory="${root}" \
     --null --files-from="${roots}"
 zstd --test "${temporary}"
-archive_entries=$(tar --list --zstd --file="${temporary}" | wc -l)
+archive_entries=$("${tar}" --list --zstd --file="${temporary}" | wc -l)
 [[ ${archive_entries} -eq ${source_entries} ]] || {
     echo "entry mismatch: source=${source_entries} archive=${archive_entries}" >&2
     exit 1
 }
-tar --compare --zstd --file="${temporary}" --directory="${root}"
-checksum=$(sha256sum "${temporary}" | awk '{print $1}')
+"${tar}" --compare --zstd --file="${temporary}" --directory="${root}"
+checksum=$("${sha256[@]}" "${temporary}" | awk '{print $1}')
 
 cat > "${temporary_manifest}" <<EOF
 namespace=${namespace}
@@ -98,10 +102,12 @@ mv "${temporary_manifest}" "${manifest}"
 
 if [[ ${remove_source} == true ]]; then
     while IFS= read -r -d '' source_root; do
+        [[ ${source_root} == ./summary/* ]] && continue
         rm -rf -- "${root}/${source_root#./}"
     done < "${roots}"
     find "${root}" -mindepth 1 -depth -type d -empty -delete
-    if find "${root}" -type d -name "${namespace}" -print -quit | grep -q .; then
+    if find "${root}" -path "${root}/summary" -prune -o \
+        -type d -name "${namespace}" -print -quit | grep -q .; then
         echo "namespace remains after removal: ${namespace}" >&2
         exit 1
     fi

@@ -43,10 +43,10 @@ def test_archive_namespace_is_exact_and_removal_is_explicit(
     assert archive.with_suffix(archive.suffix + ".manifest.txt").is_file()
     assert "entries=4" in result.stdout
     assert not first.exists()
-    assert not second.exists()
+    assert (second / "summary.csv").is_file()
     assert (unrelated / "model.pt").read_bytes() == b"keep"
 
-    tar = shutil.which("tar")
+    tar = shutil.which("gtar") or shutil.which("tar")
     assert tar is not None
     listing = subprocess.run(
         [tar, "--list", "--zstd", f"--file={archive}"],

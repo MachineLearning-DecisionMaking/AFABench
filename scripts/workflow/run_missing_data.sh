@@ -217,6 +217,7 @@ set +e
 status=$?
 set -e
 stop_runtime_services
+find .snakemake/metadata -type f -mmin +60 -delete 2>/dev/null || true
 if [[ ${status} -eq 0 && ${dry_run} == false && -n ${archive_dir} ]]; then
     archive_args=(
         --namespace "${namespace}"
