@@ -264,12 +264,14 @@ def plot(
     methods: list[str],
     output: Path,
     xlabel: str,
+    *,
+    legend: bool,
 ) -> None:
     apply_paper_style()
     mpl.rcParams["hatch.linewidth"] = 0.35
     limits = _limits(scores, datasets)
-    strip = 0.95
-    body = 0.35 + 0.36 * len(methods)
+    strip = 0.95 if legend else 0.32
+    body = 0.3 + 0.28 * len(methods)
     height = strip + body
     figure, axes = plt.subplots(
         1,
@@ -282,19 +284,20 @@ def plot(
         _draw(axis, scores, dataset, methods)
         axis.set_xlim(*limits[dataset])
     figure.supxlabel(xlabel, fontsize=8, y=(strip - 0.27) / height)
-    figure.legend(
-        handles=_legend(),
-        loc="lower center",
-        ncol=3,
-        frameon=False,
-        fontsize=6.3,
-        labelcolor=INK,
-        columnspacing=1.0,
-        handlelength=1.3,
-        handleheight=1.0,
-        labelspacing=0.45,
-        bbox_to_anchor=(0.5, 0.0),
-    )
+    if legend:
+        figure.legend(
+            handles=_legend(),
+            loc="lower center",
+            ncol=3,
+            frameon=False,
+            fontsize=6.3,
+            labelcolor=INK,
+            columnspacing=1.0,
+            handlelength=1.3,
+            handleheight=1.0,
+            labelspacing=0.45,
+            bbox_to_anchor=(0.5, 0.0),
+        )
     figure.subplots_adjust(
         left=0.12,
         right=0.99,
@@ -328,7 +331,14 @@ def main() -> None:
         ("real", REAL, "Macro-F1"),
     ):
         output = arguments.output_dir / f"restoration_{name}_mcar.pdf"
-        plot(scores, datasets, methods, output, xlabel)
+        plot(
+            scores,
+            datasets,
+            methods,
+            output,
+            xlabel,
+            legend=name == "synthetic",
+        )
         scores[scores["dataset"].isin(datasets)].to_csv(
             output.with_suffix(".csv"), index=False
         )
