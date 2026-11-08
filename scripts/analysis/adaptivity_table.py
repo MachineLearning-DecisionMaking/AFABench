@@ -53,7 +53,7 @@ def render(frame: pd.DataFrame, *, mechanism: str, p: float) -> str:
         f"missingness damage under {mechanism.upper()} at $p={p:g}$, "
         "averaged over the eight datasets and, for \\JAFA{}, \\OL{} and "
         "\\ODIN{}, over both state representations.",
-        f"Across method--dataset cells, Pearson $r={pearson:.2f}$ and "
+        f"Across method--dataset combinations, Pearson $r={pearson:.2f}$ and "
         f"Spearman $\\rho={spearman:.2f}$ between margin and damage.}}",
         "\\label{tab:adaptivity}",
         "{\\footnotesize",
