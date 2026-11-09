@@ -56,18 +56,17 @@ NAMESPACES = [
     "constant_fill_core_group",
     "constant_fill_induced_nonuniform",
     "constant_fill_induced_real",
+    "mice_label_core_group",
+    "mice_label_induced_nonuniform",
+    "mice_label_induced_real",
 ]
 
-# Hue by kind of imputer, shape by imputer: three hues are the most that stay
-# apart pairwise under colour-vision deficiency.
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 APPROACHES = {
     "restricted": ("Restricted-Action Training", INK, "o"),
-    "zero_fill": ("Generative Restoration (Zero)", AQUA, "s"),
-    "mean_fill": ("Generative Restoration (Mean)", AQUA, "D"),
-    "knn_fill": ("Generative Restoration (kNN)", ORANGE, "^"),
-    "mice_fill": ("Generative Restoration (MICE)", ORANGE, "v"),
-    "pvae_label_conditioned": ("Generative Restoration (PVAE)", BLUE, "o"),
+    "mean_fill": ("Restoration: Mean-Fill", AQUA, "D"),
+    "mice_label_fill": ("Restoration: MICE, Label-Conditioned", ORANGE, "v"),
+    "pvae_label_conditioned": ("Restoration: PVAE", BLUE, "o"),
 }
 OFFSETS = dict(
     zip(APPROACHES, np.linspace(-0.3, 0.3, len(APPROACHES)), strict=True)

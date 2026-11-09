@@ -133,85 +133,155 @@ def _write(name: str, body: str) -> None:
     print(f"wrote {path}")
 
 
+GROUP_NAMES = ("core_group", "induced_nonuniform", "induced_real")
+PREDICTORS = ("complete", "incomplete", "restored")
+INCOMPLETE_PLANNED = frozenset(
+    {
+        "zero_fill",
+        "mean_fill",
+        "knn_fill",
+        "mice_fill",
+        "mice_label_fill",
+        "pvae_label_conditioned",
+    }
+)
+TBD = "TBD"
+
+
+def _damaged(
+    scores: pd.DataFrame,
+    paper: pd.DataFrame,
+    members: frozenset[str],
+    mechanism: str = "mcar",
+) -> list[tuple[str, str]]:
+    combinations = []
+    for dataset in sorted(members):
+        for method in METHODS:
+            reference = _cell(
+                paper, dataset, method, mechanism, REFERENCE_RATE[RATE_P]
+            )
+            complete = _complete(scores, dataset, method)
+            if (
+                "restricted" in reference
+                and complete - reference["restricted"] >= DAMAGE_THRESHOLD
+            ):
+                combinations.append((dataset, method))
+    return combinations
+
+
+def _recovered(
+    scores: pd.DataFrame,
+    trained: pd.DataFrame,
+    combinations: list[tuple[str, str]],
+    strategy: str,
+    mechanism: str = "mcar",
+) -> float | None:
+    gain = damage = 0.0
+    for dataset, method in combinations:
+        cell = _cell(trained, dataset, method, mechanism, RATE_P)
+        if "restricted" not in cell or strategy not in cell:
+            return None
+        complete = _complete(scores, dataset, method)
+        gain += cell[strategy] - cell["restricted"]
+        damage += complete - cell["restricted"]
+    return gain / damage if damage else None
+
+
+def _mean_damage(
+    scores: pd.DataFrame,
+    trained: pd.DataFrame,
+    combinations: list[tuple[str, str]],
+) -> float | None:
+    damages = []
+    for dataset, method in combinations:
+        cell = _cell(trained, dataset, method, "mcar", RATE_P)
+        if "restricted" not in cell:
+            return None
+        damages.append(_complete(scores, dataset, method) - cell["restricted"])
+    return float(np.mean(damages)) if damages else None
+
+
+def _entry(value: float | None, digits: int = 2) -> str:
+    return TBD if value is None else _fmt(value, digits)
+
+
 def _quality(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
     frame = pd.read_csv(path)
-    return cast("pd.DataFrame", frame[frame["dataset"].isin(list(SYNTHETIC))])
+    return cast("pd.DataFrame", frame[frame["split"] == "val"])
 
 
-def _quality_cells(quality: pd.DataFrame | None, strategy: str) -> str:
-    if quality is None:
-        return "--"
+def _restored_score(
+    quality: pd.DataFrame | None, strategy: str, members: frozenset[str]
+) -> str:
+    metric = "accuracy" if members <= SYNTHETIC else "f_score"
+    if quality is None or f"restored_{metric}" not in quality:
+        return TBD
+    rows = quality[quality["dataset"].isin(list(members))]
     if strategy == "true_completion":
-        accuracy = quality["complete_accuracy"].dropna().mean()
-        return _fmt(float(accuracy), 3)
-    rows = quality[quality["strategy"] == strategy]
-    accuracy = rows.loc[rows["split"] == "val", "restored_accuracy"].mean()
-    return _fmt(float(accuracy), 3)
+        return _fmt(float(rows[f"complete_{metric}"].mean()), 3)
+    rows = rows[rows["strategy"] == strategy]
+    value = float(rows[f"restored_{metric}"].mean())
+    return _fmt(value, 3) if np.isfinite(value) else TBD
 
 
 def approaches_table(
-    scores: pd.DataFrame, quality: pd.DataFrame | None
+    scores: pd.DataFrame,
+    paper: pd.DataFrame,
+    trained: dict[str, pd.DataFrame],
+    quality: pd.DataFrame | None,
 ) -> None:
-    datasets = set(scores["dataset"].unique())
-    groups = {
-        "Synthetic": SYNTHETIC & datasets,
-        "Real-World": frozenset(datasets - SYNTHETIC),
-    }
-    shares: dict[str, list[str]] = {strategy: [] for strategy in APPROACHES}
-    counts: dict[str, int] = {}
-    for name, members in groups.items():
-        rows = scores[scores["dataset"].isin(list(members))]
-        present = [
-            strategy
-            for strategy in APPROACHES
-            if strategy != "true_completion"
-            and (rows["strategy"] == strategy).any()
+    datasets = frozenset(scores["dataset"].unique())
+    groups = (SYNTHETIC & datasets, datasets - SYNTHETIC)
+    combinations = [_damaged(scores, paper, members) for members in groups]
+    for members, selected in zip(groups, combinations, strict=True):
+        print(f"restoration approaches: {sorted(members)}: {len(selected)}")
+    damage = ["\\emph{Damage}", "", ""]
+    for predictor in PREDICTORS:
+        damage += [
+            _entry(_mean_damage(scores, trained[predictor], selected), 3)
+            for selected in combinations
         ]
-        cells = []
-        for dataset in sorted(members):
-            for method in METHODS:
-                cell = _cell(scores, dataset, method, "mcar", float(RATE))
-                complete = _complete(scores, dataset, method)
-                if "restricted" not in cell or not set(present) <= set(cell):
-                    continue
-                if complete - cell["restricted"] >= DAMAGE_THRESHOLD:
-                    cells.append((cell, complete))
-        counts[name] = len(cells)
-        print(f"restoration approaches, {name}: {len(cells)} combinations")
-        damage = sum(complete - cell["restricted"] for cell, complete in cells)
-        for strategy in APPROACHES:
-            if strategy == "true_completion" and cells:
-                value = 1.0
-            elif strategy in present and cells:
-                gain = sum(
-                    cell[strategy] - cell["restricted"] for cell, _ in cells
-                )
-                value = gain / damage
-            else:
-                value = math.nan
-            shares[strategy].append(_fmt(value))
-    rows = [
-        f"{label} & {_quality_cells(quality, strategy)} & "
-        + " & ".join(shares[strategy])
-        + r" \\"
-        for strategy, label in APPROACHES.items()
-    ]
+    rows = [" & ".join(damage) + r" \\", r"\midrule"]
+    for strategy, label in APPROACHES.items():
+        cells = [label]
+        cells += [_restored_score(quality, strategy, m) for m in groups]
+        for predictor in PREDICTORS:
+            for selected in combinations:
+                if strategy == "true_completion":
+                    cells.append("$1.00$" if predictor == "complete" else "--")
+                elif (
+                    predictor == "incomplete"
+                    and strategy not in INCOMPLETE_PLANNED
+                ):
+                    cells.append("--")
+                else:
+                    cells.append(
+                        _entry(
+                            _recovered(
+                                scores, trained[predictor], selected, strategy
+                            )
+                        )
+                    )
+        rows.append(" & ".join(cells) + r" \\")
     _write(
         "restoration_approaches.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Accuracy of the complete-data predictor on the restored validation data, and fraction of the missingness damage recovered under MCAR at $p = 0.7$, over """
-        f"${counts['Synthetic']}$ synthetic and ${counts['Real-World']}$"
-        r""" real-world method--dataset combinations with a damage of at least $0.01$ for which all approaches were run. Accuracy is averaged over the synthetic datasets.}
+\caption{Restored score of the complete-data predictor on the restored validation data (accuracy on the synthetic and macro-F1 on the real-world datasets), and fraction of the missingness damage recovered under MCAR at $p = 0.7$, pooled over the """
+        f"${len(combinations[0])}$ synthetic and ${len(combinations[1])}$"
+        r""" real-world method--dataset combinations with a damage of at least $0.01$ at $p = 0.5$, with the predictor trained on complete data, on the incomplete training data, or on the restored training data of each approach.}
 \label{tab:restoration-approaches}
 {\footnotesize
-\begin{tabular}{lccc}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccccc}
 \toprule
-& & \multicolumn{2}{c}{Recovered ($\uparrow$)} \\
-\cmidrule(lr){3-4}
-Restoration & Restored Accuracy ($\uparrow$) & Synthetic & Real-World \\
+& \multicolumn{2}{c}{Restored Score ($\uparrow$)} & \multicolumn{6}{c}{Recovered ($\uparrow$), Predictor Trained on} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-9}
+& & & \multicolumn{2}{c}{Complete Data} & \multicolumn{2}{c}{Incomplete Data} & \multicolumn{2}{c}{Restored Data} \\
+\cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9}
+Restoration & Syn. & Real & Syn. & Real & Syn. & Real & Syn. & Real \\
 \midrule
 """
         + "\n".join(rows)
@@ -231,30 +301,62 @@ GROUPS = (
 )
 
 
-def damage_groups_table(scores: pd.DataFrame, paper: pd.DataFrame) -> None:
+def _significance(
+    instances: pd.DataFrame,
+    dataset: str,
+    method: str,
+    mechanism: str = "mcar",
+    strategy: str = "pvae_label_conditioned",
+) -> int | None:
+    selected = instances[
+        (instances["dataset"] == dataset)
+        & (instances["method"] == method)
+        & (instances["mechanism"] == mechanism)
+        & (instances["p"] == RATE_P)
+    ]
+    pivot = selected.pivot_table(
+        index="instance", columns="strategy", values="score"
+    )
+    if not {"restricted", strategy} <= set(pivot.columns):
+        return None
+    difference = (pivot[strategy] - pivot["restricted"]).dropna()
+    if float(difference.std()) == 0.0:
+        pvalue = 0.0 if float(difference.mean()) != 0.0 else 1.0
+    else:
+        pvalue = float(cast("Any", stats.ttest_1samp(difference, 0.0)).pvalue)
+    if pvalue >= ALPHA:
+        return 0
+    return 1 if difference.mean() > 0 else -1
+
+
+def damage_groups_table(
+    scores: pd.DataFrame, paper: pd.DataFrame, instances: pd.DataFrame
+) -> None:
     rows = []
+    totals = [0, 0, 0]
     for low, high, label in GROUPS:
         selected = []
         for dataset in sorted(scores["dataset"].unique()):
             for method in METHODS:
-                cell = _cell(scores, dataset, method, "mcar", float(RATE))
-                reference = _cell(paper, dataset, method, "mcar", 0.5)
+                cell = _cell(scores, dataset, method, "mcar", RATE_P)
+                reference = _cell(
+                    paper, dataset, method, "mcar", REFERENCE_RATE[RATE_P]
+                )
                 complete = _complete(scores, dataset, method)
                 needed = {"restricted", "pvae_label_conditioned"}
                 if not needed <= set(cell) or "restricted" not in reference:
                     continue
-                damage = complete - reference["restricted"]
-                if low <= damage < high:
-                    selected.append((dataset, cell, complete))
-        synthetic = sum(dataset in SYNTHETIC for dataset, _, _ in selected)
-        damage = np.mean([c - cell["restricted"] for _, cell, c in selected])
+                if low <= complete - reference["restricted"] < high:
+                    selected.append((dataset, method, cell, complete))
+        synthetic = sum(dataset in SYNTHETIC for dataset, *_ in selected)
+        damage = np.mean([c - cell["restricted"] for *_, cell, c in selected])
         gains = [
             _fmt(
                 float(
                     np.mean(
                         [
                             cell[strategy] - cell["restricted"]
-                            for _, cell, _ in selected
+                            for *_, cell, _ in selected
                             if strategy in cell
                         ]
                     )
@@ -263,22 +365,34 @@ def damage_groups_table(scores: pd.DataFrame, paper: pd.DataFrame) -> None:
             )
             for strategy in ("pvae_label_conditioned", "mice_label_fill")
         ]
+        signs = [_significance(instances, d, m) for d, m, *_ in selected]
+        counts = [signs.count(1), signs.count(-1)]
+        totals = [
+            totals[0] + counts[0],
+            totals[1] + counts[1],
+            totals[2] + len(selected),
+        ]
         rows.append(
             f"{label} & ${synthetic}$ / ${len(selected) - synthetic}$ & "
-            f"{_fmt(float(damage), 3)} & " + " & ".join(gains) + r" \\"
+            f"{_fmt(float(damage), 3)} & "
+            + " & ".join(gains)
+            + f" & ${counts[0]}$ & ${counts[1]}$"
+            + r" \\"
         )
+    print(f"damage groups: better, worse, total: {totals}")
     _write(
         "damage_groups.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the independent runs at $p = 0.5$.}
+\caption{Gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the independent runs at $p = 0.5$, and number of combinations where the PVAE is significantly better or worse than restricted training (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
 \label{tab:damage-groups}
 {\footnotesize
-\begin{tabular}{lcccc}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
 \toprule
-& & & \multicolumn{2}{c}{Gain} \\
-\cmidrule(lr){4-5}
-Damage at $p = 0.5$ & Synthetic / Real-World & Damage at $p = 0.7$ & PVAE & MICE, Label-Conditioned \\
+& & & \multicolumn{2}{c}{Gain} & \multicolumn{2}{c}{PVAE} \\
+\cmidrule(lr){4-5} \cmidrule(lr){6-7}
+Damage at $p = 0.5$ & Syn. / Real & Damage at $p = 0.7$ & PVAE & MICE, Label-Conditioned & Better & Worse \\
 \midrule
 """
         + "\n".join(rows)
@@ -291,71 +405,43 @@ Damage at $p = 0.5$ & Synthetic / Real-World & Damage at $p = 0.7$ & PVAE & MICE
     )
 
 
-def mechanism_table(instances: pd.DataFrame) -> None:
+def mechanism_table(
+    scores: pd.DataFrame, paper: pd.DataFrame, instances: pd.DataFrame
+) -> None:
+    datasets = frozenset(scores["dataset"].unique())
     rows = []
     for mechanism, label in MECHANISMS.items():
-        counts = [0, 0, 0]
-        damage = gain = 0.0
-        selected = instances[
-            (instances["mechanism"] == mechanism) & (instances["p"] == RATE_P)
+        selected = _damaged(scores, paper, datasets, mechanism)
+        signs = [
+            _significance(instances, d, m, mechanism) for d, m in selected
         ]
-        for key, cell in selected.groupby(["dataset", "method"]):
-            dataset, method = cast("tuple[str, str]", key)
-            same = (instances["dataset"] == dataset) & (
-                instances["method"] == method
-            )
-            complete = instances[same & (instances["strategy"] == "complete")][
-                "score"
-            ].mean()
-            reference = instances[
-                same
-                & (instances["mechanism"] == mechanism)
-                & (instances["p"] == REFERENCE_RATE[RATE_P])
-                & (instances["strategy"] == "restricted")
-            ]["score"].mean()
-            if complete - reference < DAMAGE_THRESHOLD:
-                continue
-            pivot = cell.pivot_table(
-                index="instance", columns="strategy", values="score"
-            )
-            if not {"restricted", "pvae_label_conditioned"} <= set(
-                pivot.columns
-            ):
-                continue
-            difference = (
-                pivot["pvae_label_conditioned"] - pivot["restricted"]
-            ).dropna()
-            pvalue = float(
-                cast("Any", stats.ttest_1samp(difference, 0.0)).pvalue
-            )
-            if float(difference.std()) == 0.0:
-                pvalue = 0.0 if float(difference.mean()) != 0.0 else 1.0
-            significant = pvalue < ALPHA
-            counts[
-                0
-                if significant and difference.mean() > 0
-                else 1
-                if significant
-                else 2
-            ] += 1
-            damage += complete - float(pivot["restricted"].mean())
-            gain += float(difference.mean())
-        share = gain / damage if sum(counts) else math.nan
+        selected = [
+            c for c, s in zip(selected, signs, strict=True) if s is not None
+        ]
+        signs = [s for s in signs if s is not None]
+        recovered = [
+            _recovered(scores, scores, selected, strategy, mechanism)
+            for strategy in ("pvae_label_conditioned", "mice_label_fill")
+        ]
         rows.append(
-            f"{label} & ${sum(counts)}$ & {_fmt(share)} & "
-            + " & ".join(f"${value}$" for value in counts)
+            f"{label} & ${len(selected)}$ & "
+            + " & ".join(_fmt(v) if v is not None else "--" for v in recovered)
+            + " & "
+            + " & ".join(f"${signs.count(v)}$" for v in (1, -1, 0))
             + r" \\"
         )
     _write(
         "mechanism_recovery.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training at $p = 0.7$ over the damaged method--dataset combinations (damage of at least $0.01$ at $p = 0.5$): fraction of the damage recovered, pooled over combinations, and number of combinations where restoration is significantly better, significantly worse, or not significantly different (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
+\caption{Generative restoration against restricted training at $p = 0.7$ over the damaged method--dataset combinations (damage of at least $0.01$ at $p = 0.5$): fraction of the damage recovered, pooled over combinations, and number of combinations where the PVAE is significantly better, significantly worse, or not significantly different (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
 \label{tab:mechanism-recovery}
 {\footnotesize
-\begin{tabular}{lccccc}
+\begin{tabular}{lcccccc}
 \toprule
-Mechanism & Combinations & Recovered ($\uparrow$) & Better & Worse & n.s. \\
+& & \multicolumn{2}{c}{Recovered ($\uparrow$)} & \multicolumn{3}{c}{PVAE} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-7}
+Mechanism & Combinations & PVAE & MICE, Label-Conditioned & Better & Worse & n.s. \\
 \midrule
 """
         + "\n".join(rows)
@@ -432,156 +518,85 @@ $n$ & Damage & PVAE & PVAE Fit on Complete Data & Damage & PVAE & PVAE Fit on Co
     )
 
 
-def predictor_table(scores: pd.DataFrame, view: pd.DataFrame) -> None:
-    datasets = set(view["dataset"].unique())
-    groups = {
-        "Synthetic": SYNTHETIC & datasets,
-        "Real-World": frozenset(datasets - SYNTHETIC),
-    }
-    strategies = ("restricted", "pvae_label_conditioned", "mean_fill")
-    entries: dict[str, list[str]] = {"fixed": [], "view": []}
-    sizes: list[tuple[int, int]] = []
-    for members in groups.values():
-        combinations = []
-        for dataset in sorted(members):
-            for method in METHODS:
-                fixed = _cell(scores, dataset, method, "mcar", float(RATE))
-                trained = _cell(view, dataset, method, "mcar", float(RATE))
-                complete = _complete(scores, dataset, method)
-                if all(s in fixed and s in trained for s in strategies):
-                    combinations.append((fixed, trained, complete))
-        damaged = [
-            (fixed, trained, complete)
-            for fixed, trained, complete in combinations
-            if min(
-                complete - fixed["restricted"],
-                complete - trained["restricted"],
-            )
-            >= DAMAGE_THRESHOLD
-        ]
-        sizes.append((len(combinations), len(damaged)))
-        for key, index in (("fixed", 0), ("view", 1)):
-            damage = [c[2] - c[index]["restricted"] for c in combinations]
-            gain = [
-                c[index]["pvae_label_conditioned"] - c[index]["restricted"]
-                for c in combinations
-            ]
-            total = sum(c[2] - c[index]["restricted"] for c in damaged)
-            shares = [
-                sum(
-                    c[index][strategy] - c[index]["restricted"]
-                    for c in damaged
-                )
-                / total
-                if total
-                else math.nan
-                for strategy in ("pvae_label_conditioned", "mean_fill")
-            ]
-            entries[key].append(
-                f"{_fmt(float(np.mean(damage)), 3) if damage else '--'} & "
-                f"{_fmt(float(np.mean(gain)), 3) if gain else '--'} & "
-                + " & ".join(_fmt(value) for value in shares)
-            )
-        print(
-            f"predictor ablation: {sorted(members)}: {len(combinations)} combinations, {len(damaged)} damaged under both predictors"
+EXTRA_NAMESPACES = [
+    "core_group_missingness_v2",
+    "induced_real_missingness_v2",
+    "induced_nonuniform_missingness_v2",
+    *(
+        f"{kind}_{group}"
+        for kind in (
+            "sklearn_imputers",
+            "mice_label",
+            "multi_draw",
+            "constant_fill",
+            "pvae_variants",
         )
-    rows = [
-        f"{label} & " + " & ".join(entries[key]) + r" \\"
-        for key, label in (
-            ("fixed", "Complete-Data Predictor"),
-            ("view", "Predictor Trained on Training Data"),
-        )
+        for group in GROUP_NAMES
+    ),
+    "mar_core_group",
+    "mar_induced_nonuniform",
+    "mnar_self_core_group",
+    "mnar_self_induced_nonuniform",
+    "mar_induced_real",
+    "mnar_self_induced_real",
+]
+
+
+def _existing(names: list[str]) -> list[Path]:
+    paths = [SUMMARY_ROOT / name / "summary.csv" for name in names]
+    missing = [
+        name for name, p in zip(names, paths, strict=True) if not p.exists()
     ]
-    _write(
-        "predictor_ablation.tex",
-        r"""\begin{table}[H]
-\centering
-\caption{Missingness damage, mean gain of the PVAE over restricted training, and fraction of the damage recovered under MCAR at $p = 0.7$, with the predictor trained on complete or on the incomplete or restored training data. Damage and gain are averaged over """
-        f"${sizes[0][0]}$ synthetic and ${sizes[1][0]}$ real-world"
-        r""" method--dataset combinations, and the recovered damage is pooled over the """
-        f"${sizes[0][1]}$ and ${sizes[1][1]}$"
-        r""" of them that are damaged under both predictors.}
-\label{tab:predictor-ablation}
-{\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccccccc}
-\toprule
-& \multicolumn{4}{c}{Synthetic} & \multicolumn{4}{c}{Real-World} \\
-\cmidrule(lr){2-5} \cmidrule(lr){6-9}
-& & & \multicolumn{2}{c}{Recovered ($\uparrow$)} & & & \multicolumn{2}{c}{Recovered ($\uparrow$)} \\
-\cmidrule(lr){4-5} \cmidrule(lr){8-9}
-Predictor & Damage & Gain & PVAE & Mean-Fill & Damage & Gain & PVAE & Mean-Fill \\
-\midrule
-"""
-        + "\n".join(rows)
-        + r"""
-\bottomrule
-\end{tabular}
-}
-\end{table}
-""",
+    if missing:
+        print(f"missing summaries: {missing}", file=sys.stderr)
+    return [path for path in paths if path.exists()]
+
+
+def _trained(scores: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    restored = _existing(
+        [f"view_classifier_{g}" for g in GROUP_NAMES]
+        + [f"view_classifier_extra_{g}" for g in GROUP_NAMES]
     )
+    restored_scores = _scores(restored)
+    restricted = cast(
+        "pd.DataFrame",
+        restored_scores[restored_scores["strategy"] == "restricted"],
+    )
+    incomplete = _existing(
+        [
+            f"restricted_predictor_{kind}_{g}"
+            for kind in ("fills", "models")
+            for g in GROUP_NAMES
+        ]
+    )
+    frames = [restricted] + ([_scores(incomplete)] if incomplete else [])
+    return {
+        "complete": scores,
+        "incomplete": pd.concat(frames),
+        "restored": restored_scores,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--namespace", default="induced")
-    parser.add_argument(
-        "--extra-namespaces",
-        nargs="*",
-        default=[
-            "core_group_missingness_v2",
-            "induced_real_missingness_v2",
-            "induced_nonuniform_missingness_v2",
-            "sklearn_imputers_core_group",
-            "sklearn_imputers_induced_real",
-            "sklearn_imputers_induced_nonuniform",
-            "mice_label_core_group",
-            "mice_label_induced_real",
-            "mice_label_induced_nonuniform",
-            "multi_draw_core_group",
-            "multi_draw_induced_real",
-            "multi_draw_induced_nonuniform",
-            "constant_fill_core_group",
-            "constant_fill_induced_real",
-            "constant_fill_induced_nonuniform",
-            "pvae_variants_core_group",
-            "pvae_variants_induced_real",
-            "pvae_variants_induced_nonuniform",
-        ],
-    )
     arguments = parser.parse_args()
-    missing = [
-        name
-        for name in arguments.extra_namespaces
-        if not (SUMMARY_ROOT / name / "summary.csv").exists()
-    ]
-    if missing:
-        print(
-            f"missing summaries, tables are partial: {missing}",
-            file=sys.stderr,
-        )
-    paths = [SUMMARY_ROOT / arguments.namespace / "summary.csv"] + [
-        SUMMARY_ROOT / name / "summary.csv"
-        for name in arguments.extra_namespaces
-        if name not in missing
-    ]
+    paths = [SUMMARY_ROOT / arguments.namespace / "summary.csv"]
+    paths += _existing(EXTRA_NAMESPACES)
     scores = _scores(paths)
     paper = _scores(paths[:1])
     instances = _instances(
         SUMMARY_ROOT / arguments.namespace / "instance_metrics.csv"
     )
-    approaches_table(scores, _quality(SUMMARY_ROOT / "imputation_quality.csv"))
-    damage_groups_table(scores, paper)
-    mechanism_table(instances)
+    damage_groups_table(scores, paper, instances)
+    approaches_table(
+        scores,
+        paper,
+        _trained(scores),
+        _quality(SUMMARY_ROOT / "imputation_quality.csv"),
+    )
+    mechanism_table(scores, paper, instances)
     size_table()
-    view_paths = [
-        SUMMARY_ROOT / f"view_classifier_{group}" / "summary.csv"
-        for group in ("core_group", "induced_real", "induced_nonuniform")
-    ]
-    view_paths = [path for path in view_paths if path.exists()]
-    if view_paths:
-        predictor_table(scores, _scores(view_paths))
 
 
 if __name__ == "__main__":
