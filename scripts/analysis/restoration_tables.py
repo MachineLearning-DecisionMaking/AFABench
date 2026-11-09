@@ -148,25 +148,15 @@ INCOMPLETE_PLANNED = frozenset(
 TBD = "TBD"
 
 
-def _damaged(
-    scores: pd.DataFrame,
-    paper: pd.DataFrame,
-    members: frozenset[str],
-    mechanism: str = "mcar",
+def _combinations(
+    scores: pd.DataFrame, members: frozenset[str], mechanism: str = "mcar"
 ) -> list[tuple[str, str]]:
-    combinations = []
-    for dataset in sorted(members):
-        for method in METHODS:
-            reference = _cell(
-                paper, dataset, method, mechanism, REFERENCE_RATE[RATE_P]
-            )
-            complete = _complete(scores, dataset, method)
-            if (
-                "restricted" in reference
-                and complete - reference["restricted"] >= DAMAGE_THRESHOLD
-            ):
-                combinations.append((dataset, method))
-    return combinations
+    return [
+        (dataset, method)
+        for dataset in sorted(members)
+        for method in METHODS
+        if "restricted" in _cell(scores, dataset, method, mechanism, RATE_P)
+    ]
 
 
 def _recovered(
@@ -209,7 +199,7 @@ def _quality(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
     frame = pd.read_csv(path)
-    return cast("pd.DataFrame", frame[frame["split"] == "val"])
+    return frame
 
 
 def _restored_score(
@@ -218,7 +208,9 @@ def _restored_score(
     metric = "accuracy" if members <= SYNTHETIC else "f_score"
     if quality is None or f"restored_{metric}" not in quality:
         return TBD
-    rows = quality[quality["dataset"].isin(list(members))]
+    rows = quality[
+        quality["dataset"].isin(list(members)) & (quality["split"] == "val")
+    ]
     if strategy == "true_completion":
         return _fmt(float(rows[f"complete_{metric}"].mean()), 3)
     rows = rows[rows["strategy"] == strategy]
@@ -226,62 +218,130 @@ def _restored_score(
     return _fmt(value, 3) if np.isfinite(value) else TBD
 
 
+def _rmse(
+    quality: pd.DataFrame | None, strategy: str, members: frozenset[str]
+) -> str:
+    if quality is None or strategy == "true_completion":
+        return "--"
+    rows = quality[
+        quality["dataset"].isin(list(members))
+        & (quality["strategy"] == strategy)
+        & (quality["split"] == "train")
+    ]
+    return _fmt(float(rows["rmse"].mean()), 2) if len(rows) else TBD
+
+
+REFERENCES = frozenset({"pvae_oracle", "true_completion"})
+
+
+def _highlight(rows: list[list[str]], lower: list[bool]) -> None:
+    """Bold the best and underline the second best entry of each column."""
+    for column, low in enumerate(lower, start=1):
+        if any(row[column] == TBD for row in rows):
+            continue
+        values = []
+        for index, row in enumerate(rows):
+            try:
+                values.append((float(row[column].strip("$")), index))
+            except ValueError:
+                continue
+        ranked = sorted({v for v, _ in values}, reverse=not low)
+        for value, index in values:
+            number = rows[index][column].strip("$")
+            if value == ranked[0]:
+                rows[index][column] = rf"$\mathbf{{{number}}}$"
+            elif len(ranked) > 1 and value == ranked[1]:
+                rows[index][column] = rf"\underline{{${number}$}}"
+
+
 def approaches_table(
     scores: pd.DataFrame,
-    paper: pd.DataFrame,
     trained: dict[str, pd.DataFrame],
     quality: pd.DataFrame | None,
 ) -> None:
     datasets = frozenset(scores["dataset"].unique())
     groups = (SYNTHETIC & datasets, datasets - SYNTHETIC)
-    combinations = [_damaged(scores, paper, members) for members in groups]
+    combinations = [_combinations(scores, members) for members in groups]
     for members, selected in zip(groups, combinations, strict=True):
         print(f"restoration approaches: {sorted(members)}: {len(selected)}")
-    damage = ["\\emph{Damage}", "", ""]
+    sizes = f"${len(combinations[0])}$ synthetic and ${len(combinations[1])}$"
+
+    def recovered(strategy: str, predictor: str) -> list[str]:
+        if strategy == "true_completion":
+            return ["$1.00$"] * 2
+        return [
+            _entry(_recovered(scores, trained[predictor], c, strategy))
+            for c in combinations
+        ]
+
+    ranked: list[list[str]] = []
+    references: list[list[str]] = []
+    for strategy, label in APPROACHES.items():
+        cells = [label]
+        cells += [_rmse(quality, strategy, m) for m in groups]
+        cells += [_restored_score(quality, strategy, m) for m in groups]
+        cells += recovered(strategy, "complete")
+        (references if strategy in REFERENCES else ranked).append(cells)
+    _highlight(ranked, [True, True, False, False, False, False])
+    rows = [" & ".join(c) + r" \\" for c in ranked]
+    rows += [r"\midrule"] + [" & ".join(c) + r" \\" for c in references]
+    _write(
+        "restoration_approaches.tex",
+        r"""\begin{table}[H]
+\centering
+\caption{Properties of each imputation, averaged over the datasets: RMSE on the missing training values, and accuracy (synthetic) and macro-F1 (real-world) of the complete-data predictor on the restored validation data with all features observed. Resulting AFA performance: fraction of the missingness damage recovered under MCAR at $p = 0.7$, pooled over the """
+        + sizes
+        + r""" real-world method--dataset combinations.}
+\label{tab:restoration-approaches}
+{\footnotesize
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{2}{c}{RMSE ($\downarrow$)} & \multicolumn{2}{c}{Accuracy / F1 ($\uparrow$)} & \multicolumn{2}{c}{Recovered ($\uparrow$)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+Restoration & Syn. & Real & Syn. & Real & Syn. & Real \\
+\midrule
+"""
+        + "\n".join(rows)
+        + r"""
+\bottomrule
+\end{tabular}
+}
+\end{table}
+""",
+    )
+    damage = [r"\emph{Damage}"]
     for predictor in PREDICTORS:
         damage += [
             _entry(_mean_damage(scores, trained[predictor], selected), 3)
             for selected in combinations
         ]
-    rows = [" & ".join(damage) + r" \\", r"\midrule"]
+    ranked = []
     for strategy, label in APPROACHES.items():
+        if strategy not in INCOMPLETE_PLANNED:
+            continue
         cells = [label]
-        cells += [_restored_score(quality, strategy, m) for m in groups]
         for predictor in PREDICTORS:
-            for selected in combinations:
-                if strategy == "true_completion":
-                    cells.append("$1.00$" if predictor == "complete" else "--")
-                elif (
-                    predictor == "incomplete"
-                    and strategy not in INCOMPLETE_PLANNED
-                ):
-                    cells.append("--")
-                else:
-                    cells.append(
-                        _entry(
-                            _recovered(
-                                scores, trained[predictor], selected, strategy
-                            )
-                        )
-                    )
-        rows.append(" & ".join(cells) + r" \\")
+            cells += recovered(strategy, predictor)
+        ranked.append(cells)
+    _highlight(ranked, [False] * 6)
+    rows = [" & ".join(damage) + r" \\", r"\midrule"]
+    rows += [" & ".join(c) + r" \\" for c in ranked]
     _write(
-        "restoration_approaches.tex",
+        "predictor_ablation.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Restored score of the complete-data predictor on the restored validation data (accuracy on the synthetic and macro-F1 on the real-world datasets), and fraction of the missingness damage recovered under MCAR at $p = 0.7$, pooled over the """
-        f"${len(combinations[0])}$ synthetic and ${len(combinations[1])}$"
-        r""" real-world method--dataset combinations with a damage of at least $0.01$ at $p = 0.5$, with the predictor trained on complete data, on the incomplete training data, or on the restored training data of each approach.}
-\label{tab:restoration-approaches}
+\caption{Mean missingness damage and fraction of the damage recovered under MCAR at $p = 0.7$ with the predictor trained on complete data, on the incomplete training data, or on the restored training data of each approach, over the same """
+        + sizes
+        + r""" real-world method--dataset combinations as \Cref{tab:restoration-approaches}.}
+\label{tab:predictor-ablation}
 {\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccccccc}
+\begin{tabular}{lcccccc}
 \toprule
-& \multicolumn{2}{c}{Restored Score ($\uparrow$)} & \multicolumn{6}{c}{Recovered ($\uparrow$), Predictor Trained on} \\
-\cmidrule(lr){2-3} \cmidrule(lr){4-9}
-& & & \multicolumn{2}{c}{Complete Data} & \multicolumn{2}{c}{Incomplete Data} & \multicolumn{2}{c}{Restored Data} \\
-\cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9}
-Restoration & Syn. & Real & Syn. & Real & Syn. & Real & Syn. & Real \\
+& \multicolumn{6}{c}{Predictor Trained on} \\
+\cmidrule(lr){2-7}
+& \multicolumn{2}{c}{Complete Data} & \multicolumn{2}{c}{Incomplete Data} & \multicolumn{2}{c}{Restored Data} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+Restoration & Syn. & Real & Syn. & Real & Syn. & Real \\
 \midrule
 """
         + "\n".join(rows)
@@ -384,15 +444,15 @@ def damage_groups_table(
         "damage_groups.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the independent runs at $p = 0.5$, and number of combinations where the PVAE is significantly better or worse than restricted training (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
+\caption{Mean gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the independent runs at $p = 0.5$, and number of combinations where the PVAE is significantly better or worse than restricted training (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
 \label{tab:damage-groups}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{lcccccc}
 \toprule
-& & & \multicolumn{2}{c}{Gain} & \multicolumn{2}{c}{PVAE} \\
+& & & \multicolumn{2}{c}{Mean Gain} & \multicolumn{2}{c}{PVAE} \\
 \cmidrule(lr){4-5} \cmidrule(lr){6-7}
-Damage at $p = 0.5$ & Syn. / Real & Damage at $p = 0.7$ & PVAE & MICE, Label-Conditioned & Better & Worse \\
+Damage at $p = 0.5$ & Syn. / Real & Mean Damage & PVAE & MICE, Label-Conditioned & Better & Worse \\
 \midrule
 """
         + "\n".join(rows)
@@ -405,13 +465,11 @@ Damage at $p = 0.5$ & Syn. / Real & Damage at $p = 0.7$ & PVAE & MICE, Label-Con
     )
 
 
-def mechanism_table(
-    scores: pd.DataFrame, paper: pd.DataFrame, instances: pd.DataFrame
-) -> None:
+def mechanism_table(scores: pd.DataFrame, instances: pd.DataFrame) -> None:
     datasets = frozenset(scores["dataset"].unique())
     rows = []
     for mechanism, label in MECHANISMS.items():
-        selected = _damaged(scores, paper, datasets, mechanism)
+        selected = _combinations(scores, datasets, mechanism)
         signs = [
             _significance(instances, d, m, mechanism) for d, m in selected
         ]
@@ -424,7 +482,7 @@ def mechanism_table(
             for strategy in ("pvae_label_conditioned", "mice_label_fill")
         ]
         rows.append(
-            f"{label} & ${len(selected)}$ & "
+            f"{label} & "
             + " & ".join(_fmt(v) if v is not None else "--" for v in recovered)
             + " & "
             + " & ".join(f"${signs.count(v)}$" for v in (1, -1, 0))
@@ -434,14 +492,15 @@ def mechanism_table(
         "mechanism_recovery.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Generative restoration against restricted training at $p = 0.7$ over the damaged method--dataset combinations (damage of at least $0.01$ at $p = 0.5$): fraction of the damage recovered, pooled over combinations, and number of combinations where the PVAE is significantly better, significantly worse, or not significantly different (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
+\caption{Generative restoration against restricted training at $p = 0.7$ over all $72$ method--dataset combinations: fraction of the damage recovered, pooled over combinations, and number of combinations where the PVAE is significantly better, significantly worse, or not significantly different (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
 \label{tab:mechanism-recovery}
 {\footnotesize
-\begin{tabular}{lcccccc}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
 \toprule
-& & \multicolumn{2}{c}{Recovered ($\uparrow$)} & \multicolumn{3}{c}{PVAE} \\
-\cmidrule(lr){3-4} \cmidrule(lr){5-7}
-Mechanism & Combinations & PVAE & MICE, Label-Conditioned & Better & Worse & n.s. \\
+& \multicolumn{2}{c}{Recovered ($\uparrow$)} & \multicolumn{3}{c}{PVAE} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-6}
+Mechanism & PVAE & MICE, Label-Conditioned & Better & Worse & n.s. \\
 \midrule
 """
         + "\n".join(rows)
@@ -500,7 +559,7 @@ def size_table() -> None:
 \caption{Missingness damage and restoration error under MCAR at $p = 0.7$ against the dataset size $n$, averaged over methods.}
 \label{tab:size-sweep}
 {\footnotesize
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lcccccc}
 \toprule
 & \multicolumn{3}{c}{CUBE} & \multicolumn{3}{c}{CUBE-NM} \\
@@ -591,11 +650,10 @@ def main() -> None:
     damage_groups_table(scores, paper, instances)
     approaches_table(
         scores,
-        paper,
         _trained(scores),
         _quality(SUMMARY_ROOT / "imputation_quality.csv"),
     )
-    mechanism_table(scores, paper, instances)
+    mechanism_table(scores, instances)
     size_table()
 
 

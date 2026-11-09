@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import matplotlib as mpl
 
@@ -63,7 +63,7 @@ NAMESPACES = [
 
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 APPROACHES = {
-    "restricted": ("Restricted-Action Training", INK, "o"),
+    "restricted": ("Restricted Training", INK, "o"),
     "mean_fill": ("Restoration: Mean-Fill", AQUA, "D"),
     "mice_label_fill": ("Restoration: MICE, Label-Conditioned", ORANGE, "v"),
     "pvae_label_conditioned": ("Restoration: PVAE", BLUE, "o"),
@@ -74,13 +74,46 @@ OFFSETS = dict(
 SEED = 0
 
 
-def collect(summary_root: Path) -> pd.DataFrame:
-    """Mean score and bootstrap interval per dataset, method and approach."""
+GROUPS = ("core_group", "induced_nonuniform", "induced_real")
+PREDICTOR_NAMESPACES = {
+    "incomplete": [
+        f"restricted_predictor_{kind}_{group}"
+        for kind in ("fills", "models")
+        for group in GROUPS
+    ],
+    "restored": [f"view_classifier_{group}" for group in GROUPS]
+    + [f"view_classifier_extra_{group}" for group in GROUPS],
+}
+
+
+def _read(summary_root: Path, namespaces: list[str]) -> list[pd.DataFrame]:
     frames = []
-    for namespace in NAMESPACES:
+    for namespace in namespaces:
         path = summary_root / namespace / "instance_metrics.csv"
         if path.exists():
             frames.append(pd.read_csv(path))
+    return frames
+
+
+def _frames(summary_root: Path, predictor: str) -> list[pd.DataFrame]:
+    """Complete data from the main runs, the rest from the predictor's runs."""
+    frames = _read(summary_root, NAMESPACES)
+    if predictor == "complete":
+        return frames
+    main = pd.concat(frames, ignore_index=True)
+    complete = cast("pd.DataFrame", main[main["strategy"] == "complete"])
+    views = pd.concat(
+        _read(summary_root, [f"view_classifier_{g}" for g in GROUPS]),
+        ignore_index=True,
+    )
+    restricted = cast("pd.DataFrame", views[views["strategy"] == "restricted"])
+    restored = _read(summary_root, PREDICTOR_NAMESPACES[predictor])
+    return [complete, restricted, *restored]
+
+
+def collect(summary_root: Path, predictor: str = "complete") -> pd.DataFrame:
+    """Mean score and bootstrap interval per dataset, method and approach."""
+    frames = _frames(summary_root, predictor)
     frame = pd.concat(frames, ignore_index=True).drop_duplicates(
         ["dataset", "method", "mechanism", "p", "strategy", "instance"]
         + ["eval_hard_budget"]
@@ -322,26 +355,43 @@ def main() -> None:
         type=Path,
         default=Path("extra/output/paper/experiments/results"),
     )
+    parser.add_argument(
+        "--predictor",
+        nargs="+",
+        default=["complete", "incomplete", "restored"],
+        choices=["complete", "incomplete", "restored"],
+    )
     arguments = parser.parse_args()
-    scores = collect(arguments.summary_root)
-    methods = _method_order(scores)
-    for name, datasets, xlabel in (
-        ("synthetic", SYNTHETIC, "Accuracy"),
-        ("real", REAL, "Macro-F1"),
-    ):
-        output = arguments.output_dir / f"restoration_{name}_mcar.pdf"
-        plot(
-            scores,
-            datasets,
-            methods,
-            output,
-            xlabel,
-            legend=name == "synthetic",
-        )
-        scores[scores["dataset"].isin(datasets)].to_csv(
-            output.with_suffix(".csv"), index=False
-        )
-        print(f"wrote {output}")
+    methods = _method_order(collect(arguments.summary_root))
+    for predictor in arguments.predictor:
+        scores = collect(arguments.summary_root, predictor)
+        suffix = "" if predictor == "complete" else f"_{predictor}"
+        for name, datasets, xlabel in (
+            ("synthetic", SYNTHETIC, "Accuracy"),
+            ("real", REAL, "Macro-F1"),
+        ):
+            restored = scores[
+                scores["dataset"].isin(datasets)
+                & ~scores["strategy"].isin(["complete", "restricted"])
+            ]
+            if restored.empty:
+                print(f"skipped {name} {predictor}: no restored runs")
+                continue
+            output = (
+                arguments.output_dir / f"restoration_{name}_mcar{suffix}.pdf"
+            )
+            plot(
+                scores,
+                datasets,
+                methods,
+                output,
+                xlabel,
+                legend=name == "synthetic",
+            )
+            scores[scores["dataset"].isin(datasets)].to_csv(
+                output.with_suffix(".csv"), index=False
+            )
+            print(f"wrote {output}")
 
 
 if __name__ == "__main__":

@@ -614,7 +614,7 @@ def _level_legend() -> list[Line2D | Patch]:
             markerfacecolor=SURFACE,
             markeredgecolor=INK,
             markeredgewidth=0.9,
-            label="Restricted-Action Training",
+            label="Restricted Training",
         ),
         Line2D(
             [],

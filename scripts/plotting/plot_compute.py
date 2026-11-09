@@ -507,7 +507,7 @@ def plot(frame: pd.DataFrame, output: Path) -> None:
             markerfacecolor=SURFACE,
             markeredgecolor=INK,
             markeredgewidth=1.0,
-            label="Restricted-Action Training",
+            label="Restricted Training",
         ),
         Line2D(
             [],
