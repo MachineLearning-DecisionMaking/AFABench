@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from scripts.analysis.imputation_quality import accuracy, masked_rmse
+from scripts.analysis.imputation_quality import masked_rmse, scores
 
 
 def test_masked_rmse_uses_only_missing_values() -> None:
@@ -27,7 +27,7 @@ def test_masked_rmse_without_missing_values_is_zero() -> None:
     )
 
 
-def test_accuracy_observes_all_features() -> None:
+def test_scores_observe_all_features() -> None:
     def classifier(
         features: torch.Tensor,
         mask: torch.Tensor,
@@ -39,4 +39,21 @@ def test_accuracy_observes_all_features() -> None:
 
     features = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])
     labels = torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.0, 1.0]])
-    assert accuracy(classifier, features, labels) == pytest.approx(2 / 3)
+    accuracy, f_score = scores(classifier, features, labels)
+    assert accuracy == pytest.approx(2 / 3)
+    assert f_score == pytest.approx(2 / 3)
+
+
+def test_f_score_is_macro_averaged() -> None:
+    def classifier(
+        features: torch.Tensor,
+        mask: torch.Tensor,  # noqa: ARG001
+        feature_shape: torch.Size,  # noqa: ARG001
+    ) -> torch.Tensor:
+        return torch.stack([features[:, 0], features[:, 1]], dim=1)
+
+    features = torch.tensor([[1.0, 0.0]] * 4)
+    labels = torch.tensor([[1.0, 0.0]] * 3 + [[0.0, 1.0]])
+    accuracy, f_score = scores(classifier, features, labels)
+    assert accuracy == pytest.approx(3 / 4)
+    assert f_score == pytest.approx((6 / 7) / 2)

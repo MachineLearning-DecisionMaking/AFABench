@@ -1,4 +1,4 @@
-"""Write imputation RMSE and restored-data accuracy for restoration views."""
+"""Write imputation RMSE and restored-data scores for restoration views."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
+from sklearn.metrics import f1_score
 
 from afabench.core.bundle_system.bundle import load_bundle
 
@@ -24,6 +25,8 @@ FIELDS = [
     "rmse",
     "restored_accuracy",
     "complete_accuracy",
+    "restored_f_score",
+    "complete_f_score",
 ]
 
 
@@ -37,11 +40,11 @@ def masked_rmse(
     return float((restored[missing] - truth[missing]).square().mean().sqrt())
 
 
-def accuracy(
+def scores(
     classifier: Any,  # noqa: ANN401
     features: torch.Tensor,
     labels: torch.Tensor,
-) -> float:
+) -> tuple[float, float]:
     flat = features.flatten(start_dim=1)
     with torch.no_grad():
         logits = classifier(
@@ -49,7 +52,12 @@ def accuracy(
             torch.ones_like(flat, dtype=torch.bool),
             feature_shape=features.shape[1:],
         )
-    return float((logits.argmax(-1) == labels.argmax(-1)).float().mean())
+    predicted = logits.argmax(-1).cpu().numpy()
+    true = labels.argmax(-1).cpu().numpy()
+    f_score = f1_score(
+        true, predicted, average="macro", zero_division=cast("Any", 0)
+    )
+    return float((predicted == true).mean()), float(f_score)
 
 
 def _views(namespace: str, rate: str) -> Iterator[tuple[Path, str, str]]:
@@ -89,10 +97,14 @@ def rows(namespace: str, rate: str) -> Iterator[dict[str, object]]:
                 / f"instance-{instance}.bundle",
                 device=torch.device("cpu"),
             )
-            row["restored_accuracy"] = accuracy(
-                classifier, view.features, view.labels
-            )
-            row["complete_accuracy"] = accuracy(classifier, truth, labels)
+            (
+                row["restored_accuracy"],
+                row["restored_f_score"],
+            ) = scores(classifier, view.features, view.labels)
+            (
+                row["complete_accuracy"],
+                row["complete_f_score"],
+            ) = scores(classifier, truth, labels)
         yield row
 
 
