@@ -38,6 +38,12 @@ for group in core_group induced_nonuniform induced_real; do
     DEPENDENCIES+=(
         "rebuttal_view_classifier_extra_${group}:${base} rebuttal_sklearn_imputers_${group} rebuttal_mice_label_${group} rebuttal_multi_draw_${group}"
     )
+    # Every policy uses the predictor of restricted training.
+    for part in fills models; do
+        DEPENDENCIES+=(
+            "rebuttal_restricted_predictor_${part}_${group}:${base} rebuttal_view_classifier_${group} rebuttal_sklearn_imputers_${group} rebuttal_mice_label_${group}"
+        )
+    done
 done
 
 local_device=""

@@ -38,8 +38,13 @@ _config = load_config(config)
 NAMESPACE = str(config["artifact_namespace"])
 DATA_NAMESPACE = str(config.get("upstream_namespace", NAMESPACE))
 CLASSIFIER_SOURCE = str(config.get("classifier_source", "complete"))
-if CLASSIFIER_SOURCE not in {"complete", "view"}:
-    raise ValueError("classifier_source must be 'complete' or 'view'")
+if CLASSIFIER_SOURCE not in {"complete", "view", "restricted_view"}:
+    raise ValueError(
+        "classifier_source must be 'complete', 'view', or 'restricted_view'"
+    )
+VIEW_CLASSIFIER_NAMESPACE = str(
+    config.get("view_classifier_namespace", NAMESPACE)
+)
 INSTANCES = [int(value) for value in _config["DATASET_INSTANCE_INDICES"]]
 if not INSTANCES:
     raise ValueError("dataset_instance_indices must not be empty")
@@ -244,19 +249,23 @@ def classifier_path(dataset, instance, method=None):
 
 
 VIEW_CLASSIFIER_OUTPUT = (
-    f"{ROOT}/classifier/{NAMESPACE}/view/dataset-{{dataset}}/"
+    f"{ROOT}/classifier/{VIEW_CLASSIFIER_NAMESPACE}/view/dataset-{{dataset}}/"
     "mechanism-{mechanism}+p-{p}/instance-{instance}/{strategy}.bundle"
 )
 
 
 def policy_classifier(wildcards, method=None):
-    if CLASSIFIER_SOURCE == "view" and wildcards.strategy != "complete":
+    if CLASSIFIER_SOURCE != "complete" and wildcards.strategy != "complete":
         return VIEW_CLASSIFIER_OUTPUT.format(
             dataset=wildcards.dataset,
             mechanism=wildcards.mechanism,
             p=wildcards.p,
             instance=wildcards.instance,
-            strategy=wildcards.strategy,
+            strategy=(
+                "restricted"
+                if CLASSIFIER_SOURCE == "restricted_view"
+                else wildcards.strategy
+            ),
         )
     return classifier_path(wildcards.dataset, wildcards.instance, method)
 
@@ -532,8 +541,10 @@ NATIVE_AUDIT_OUTPUTS = (
 )
 
 configured_strategies = ["complete", "restricted", *COMMON_STRATEGIES]
-if CLASSIFIER_SOURCE == "view" and "true_completion" in COMMON_STRATEGIES:
-    raise ValueError("classifier_source 'view' does not support true_completion")
+if CLASSIFIER_SOURCE != "complete" and "true_completion" in COMMON_STRATEGIES:
+    raise ValueError(
+        f"classifier_source '{CLASSIFIER_SOURCE}' does not support true_completion"
+    )
 for spec in METHOD_SPECS.values():
     configured_strategies.extend(spec.allowed_strategies or ())
     configured_strategies.extend(spec.extra_strategies)

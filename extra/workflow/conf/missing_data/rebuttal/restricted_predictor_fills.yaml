@@ -1,0 +1,14 @@
+classifier_source: restricted_view
+methods: [aaco, dime, gdfs, jafa, ol_with_mask, ol_full_state, odin_model_free]
+strategies: [zero_fill, mean_fill, knn_fill]
+include_complete_data: false
+include_method_variants: true
+
+missingness:
+  mechanisms: [mcar]
+  probabilities: [0.7]
+
+missing_data_pretrain_reuse:
+  pvae:
+    complete: oracle_restoration_pvae
+    restricted: incomplete_restoration_pvae

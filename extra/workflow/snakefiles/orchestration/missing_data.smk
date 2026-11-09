@@ -18,6 +18,11 @@ Missing-data config keys:
     mechanisms, or probabilities without duplicating the experiment workflow.
     Optional ``include_method_variants`` omits missingness-specific controls
     from a focused experiment while retaining them by default.
+    Optional ``classifier_source`` selects the predictor of every policy:
+    ``complete`` (default) trains it on complete data, ``view`` on the
+    training data of the policy, and ``restricted_view`` on the incomplete
+    training data for every policy. ``view_classifier_namespace`` reads these
+    predictors from another namespace.
     Optional ``paper_artifacts`` adds the exact study, route analysis, compute
     accounting, and paper figures under ``extra/output/paper/experiments/results``.
     The exact study compares myopic and two-step policies as dimension varies;
