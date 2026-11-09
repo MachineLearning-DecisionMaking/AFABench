@@ -142,14 +142,13 @@ def _quality(path: Path) -> pd.DataFrame | None:
 
 def _quality_cells(quality: pd.DataFrame | None, strategy: str) -> str:
     if quality is None:
-        return "-- & --"
+        return "--"
     if strategy == "true_completion":
         accuracy = quality["complete_accuracy"].dropna().mean()
-        return f"$0$ & {_fmt(float(accuracy), 3)}"
+        return _fmt(float(accuracy), 3)
     rows = quality[quality["strategy"] == strategy]
-    rmse = rows.loc[rows["split"] == "train", "rmse"].mean()
     accuracy = rows.loc[rows["split"] == "val", "restored_accuracy"].mean()
-    return f"{_fmt(float(rmse), 3)} & {_fmt(float(accuracy), 3)}"
+    return _fmt(float(accuracy), 3)
 
 
 def approaches_table(
@@ -203,16 +202,16 @@ def approaches_table(
         "restoration_approaches.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Imputation RMSE on the masked training values, accuracy of the complete-data predictor on the restored validation data, and fraction of the missingness damage recovered under MCAR at $p = 0.7$, over """
+\caption{Accuracy of the complete-data predictor on the restored validation data, and fraction of the missingness damage recovered under MCAR at $p = 0.7$, over """
         f"${counts['Synthetic']}$ synthetic and ${counts['Real-World']}$"
-        r""" real-world method--dataset combinations with a damage of at least $0.01$ for which all approaches were run. RMSE and accuracy are averaged over the synthetic datasets.}
+        r""" real-world method--dataset combinations with a damage of at least $0.01$ for which all approaches were run. Accuracy is averaged over the synthetic datasets.}
 \label{tab:restoration-approaches}
 {\footnotesize
-\begin{tabular}{lcccc}
+\begin{tabular}{lccc}
 \toprule
-& & & \multicolumn{2}{c}{Recovered ($\uparrow$)} \\
-\cmidrule(lr){4-5}
-Restoration & RMSE ($\downarrow$) & Restored Accuracy ($\uparrow$) & Synthetic & Real-World \\
+& & \multicolumn{2}{c}{Recovered ($\uparrow$)} \\
+\cmidrule(lr){3-4}
+Restoration & Restored Accuracy ($\uparrow$) & Synthetic & Real-World \\
 \midrule
 """
         + "\n".join(rows)
