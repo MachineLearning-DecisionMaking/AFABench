@@ -444,7 +444,7 @@ def damage_groups_table(
         "damage_groups.tex",
         r"""\begin{table}[H]
 \centering
-\caption{Mean gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the independent runs at $p = 0.5$, and number of combinations where the PVAE is significantly better or worse than restricted training (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
+\caption{Mean gain of restoration over restricted training under MCAR at $p = 0.7$, with method--dataset combinations grouped by their missingness damage on the runs at $p = 0.5$, and number of combinations where the PVAE is significantly better or worse than restricted training (paired $t$-test over five splits, $\alpha = 0.05$, uncorrected).}
 \label{tab:damage-groups}
 {\footnotesize
 \setlength{\tabcolsep}{4pt}
