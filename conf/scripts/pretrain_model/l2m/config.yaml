@@ -21,8 +21,9 @@ defaults:
 # reAIM-Lab/Learning-To-Measure at the vendored commit), the family default.
 # dataset_override/<dataset_key>.yaml sets every per-dataset value.
 #
-# task_prior/<name>.yaml (select with task_prior=<name>) sets task_prior and
-# task_workers. real_pool: tasks draw instances from a pool of the train
+# task_prior/<name>.yaml (select with task_prior=<name>) sets task_prior,
+# task_workers and max_grad_norm (gradient clipping; null = none, as
+# upstream). real_pool: tasks draw instances from a pool of the train
 # split's features; synthetic: every task has new uniform features on
 # [-2, 2] with only the dataset's feature count (upstream's simulation
 # prior); both label them with upstream's random BNN. tabicl_v1: the TabICL
@@ -32,7 +33,7 @@ defaults:
 
 # The TabICL v1 prior's sub-priors: prior_bag (MLP and Gaussian process),
 # prior_bag_plus_tree (adds TreeSCM) or tree_only. Read only with tabicl_v1.
-prior_type: prior_bag
+prior_type: prior_bag #TODO: use the plus_tree variant
 architecture:
   model_dim: 256 # d_model
   embedding_depth: 4 # emb_depth
@@ -45,7 +46,7 @@ batch_size: 8 # tasks per step
 sequence_length: 1000 # num_points
 n_steps: 50000 # num_steps
 lr: 1e-4
-warmup_steps: 500 # num_warmup_steps
+warmup_steps: 500 # num_warmup_steps #TODO: it seems that training after warmup is wrong
 checkpoint_interval: 500
 n_validation_tasks: 200 # eval_batch_size
 pretraining_pool_size: 5000 # pool_size; capped at the train split size

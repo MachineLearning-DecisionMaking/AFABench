@@ -90,7 +90,10 @@ replacement, so its tasks cannot have more instances than the pool; the cube's
 The task prior and its workers come from `task_prior/<name>.yaml`, the
 other columns from the dataset's override files, so within a dataset only the
 task prior differs between the runs. Every other value (model size, learning
-rates, temperature, validation tasks) is the same for every run and dataset.
+rates, temperature, validation tasks) is the same for every run and dataset,
+except the gradient clipping: in both stages `l2m_better_synth` clips the
+gradient's total norm to 1.0 and the other two runs do not clip
+(`max_grad_norm`, below).
 
 ## Where L2M is configured
 
@@ -110,6 +113,7 @@ config is built.
 | --- | --- | --- | --- |
 | `task_prior` | `task_prior/<name>.yaml` beside `config.yaml` | `real_pool` | `task_prior=<name>` in `pretrain_params` and `method_specific_params` |
 | `task_workers` | `task_prior/<name>.yaml` | 0 (`real_pool`, `synthetic`), 4 (`tabicl_v1`) | the command line; must be 0 except with `tabicl_v1` |
+| `max_grad_norm` | `task_prior/<name>.yaml` beside `config.yaml`, in both stages | null, no clipping (`real_pool`, `synthetic`); 1.0 (`tabicl_v1`) | the command line (`max_grad_norm=null` or a positive number); in training the policy head's and the other parameters' gradients are clipped together |
 | `prior_type` | `config.yaml` | `prior_bag` | `prior_type=<type>`; only with `tabicl_v1` |
 | `sequence_length`, `n_steps`, `batch_size`, `pretraining_pool_size` | `config.yaml` | 1000, 50,000, 8, 5000 | `dataset_override/<dataset>.yaml`, then the command line |
 | `context_set_size` | `train_method/l2m/config.yaml` | 900 | the dataset override |

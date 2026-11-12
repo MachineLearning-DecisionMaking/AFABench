@@ -137,6 +137,38 @@ def test_the_runs_differ_in_their_task_prior_only(
     assert cfg.task_workers == task_workers
 
 
+@pytest.mark.parametrize(
+    ("method", "max_grad_norm"),
+    [("l2m", None), ("l2m_synth", None), ("l2m_better_synth", 1.0)],
+)
+def test_only_the_tabicl_prior_clips_the_gradient_in_both_stages(
+    method: str, max_grad_norm: float | None
+) -> None:
+    pretraining = cast(
+        "L2MPretrainingConfig",
+        _compose("pretrain_model", "metabric", RUNS[method]),
+    )
+    training = cast(
+        "L2MTrainingConfig",
+        _compose("train_method", "metabric", RUNS[method]),
+    )
+
+    assert pretraining.max_grad_norm == max_grad_norm
+    assert training.max_grad_norm == max_grad_norm
+
+
+@pytest.mark.parametrize("stage", ["pretrain_model", "train_method"])
+def test_a_command_line_override_beats_the_gradient_bound(stage: str) -> None:
+    cfg = cast(
+        "L2MPretrainingConfig | L2MTrainingConfig",
+        _compose(
+            stage, "cube", ["task_prior=tabicl_v1", "max_grad_norm=null"]
+        ),
+    )
+
+    assert cfg.max_grad_norm is None
+
+
 def test_a_command_line_override_beats_the_dataset_settings() -> None:
     cfg = cast(
         "L2MPretrainingConfig",

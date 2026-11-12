@@ -19,7 +19,8 @@ which is identical apart from the listed patches.
 | --- | --- | --- |
 | `ltm.py` | `ResidualMLP`, `TNP.__init__`, `construct_input`, `encode`, `LTM.__init__`, `forward`, `predict`, `select_action` | Identical |
 | `ltm.py` | `TNP.create_mask` | The mask is built on the batch's device, not `'cuda'` (`PATCH(afabench)`) |
-| `train_utils.py` | `predictor_training_step`, `afa_training_step`, `afa_training_step_random` | Identical |
+| `train_utils.py` | `afa_training_step_random` | Identical |
+| `train_utils.py` | `predictor_training_step`, `afa_training_step` | Clip the gradient's total norm to `config['max_grad_norm']` before the optimizer step when it is set; without it, identical (`PATCH(afabench)`). Only `l2m_better_synth` sets it, to 1.0 |
 | `model_utils.py` | `get_model` | Identical |
 | `experiment_utils.py` | `get_eval_dir`, `get_eval_path` | Identical |
 | `experiment_utils.py` | `gen_evalset`, `eval`, `eval_afa` | Validation tasks are returned and kept in the config instead of cached on disk, and use the fit's device (`PATCH(afabench)`). The reference repository additionally treats the experiment name `better_synth` like `sim` in `gen_evalset`; the vendored code does not, which changes nothing because `dataset_key` is never one of the two |
@@ -34,7 +35,9 @@ The attention mask, the input tokens, the predictor and AFA losses, the
 sequential strategy, the Gumbel-softmax selector, Adam, bf16 autocast and
 both validation functions are therefore the reference repository's. No
 difference between the vendored upstream commit and the reference
-repository's code changes training behaviour.
+repository's code changes training behaviour, except the gradient clipping
+that `l2m_better_synth` adds to both phases. `l2m` and `l2m_synth` do not clip,
+as upstream.
 
 ### The fit loops
 
@@ -46,6 +49,7 @@ and `sim.py`, which serves the TabICL prior in the reference repository.
 | --- | --- | --- |
 | Batch of tasks | `sampler.sample(batch_size, max_num_points=num_points, num_observed=feature_dim)` | The same call |
 | Phase 1 steps, learning rate | `num_steps`, Adam, linear warm-up then linear decay to 0 | `n_steps`, `lr`, `warmup_steps`; `LambdaLR` equal to `transformers.get_linear_schedule_with_warmup` |
+| Gradient clipping, phases 1 and 2 | None | None, except `l2m_better_synth`: total norm clipped to `max_grad_norm` (1.0) before every step |
 | Phase 2 steps, learning rates | `num_steps_afa`, policy head `lr_selector`, everything else `lr_backbone`, constant (`scheduler_afa: None`), temperature constant (`temp_decay: False`) | `n_steps`, `policy_lr`, `backbone_lr`, constant, `temperature` |
 | Phase 2 start | The phase 1 checkpoint | The pretrained model bundle, which holds the phase 1 best state |
 | Validation | After the training step when `step % checkpoint_interval == 0`, so at step 0; the last step only if it falls on the interval | The same |

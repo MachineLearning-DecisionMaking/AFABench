@@ -146,6 +146,9 @@ class L2MPretrainingConfig(PretrainingContract):
     pretraining_pool_size: int
     # bf16 autocast, as upstream's `Accelerator(mixed_precision="bf16")`.
     mixed_precision: bool
+    # CHANGE FROM UPSTREAM: clip the gradient's total norm to this value
+    # before every optimizer step. None does not clip, as upstream.
+    max_grad_norm: float | None
 
     def __post_init__(self) -> None:
         _check_task_shape(
@@ -158,6 +161,9 @@ class L2MPretrainingConfig(PretrainingContract):
             batch_size=self.batch_size,
             checkpoint_interval=self.checkpoint_interval,
         )
+        if self.max_grad_norm is not None and not self.max_grad_norm > 0:
+            msg = f"max_grad_norm={self.max_grad_norm} must be positive"
+            raise ValueError(msg)
 
 
 store_contract_config(name="pretrain_l2m", config_class=L2MPretrainingConfig)
@@ -183,6 +189,10 @@ class L2MTrainingConfig(TrainingContract):
     n_validation_tasks: int
     pretraining_pool_size: int
     mixed_precision: bool
+    # CHANGE FROM UPSTREAM: clip the gradient's total norm (policy head and
+    # the rest together) to this value before every optimizer step. None does
+    # not clip, as upstream.
+    max_grad_norm: float | None
     # Validation-split instances stored in the method bundle.
     context_set_size: int
 
@@ -197,6 +207,9 @@ class L2MTrainingConfig(TrainingContract):
             batch_size=self.batch_size,
             checkpoint_interval=self.checkpoint_interval,
         )
+        if self.max_grad_norm is not None and not self.max_grad_norm > 0:
+            msg = f"max_grad_norm={self.max_grad_norm} must be positive"
+            raise ValueError(msg)
         if self.context_set_size < 1:
             msg = (
                 f"context_set_size={self.context_set_size} must be at least 1"

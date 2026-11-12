@@ -22,8 +22,9 @@ defaults:
 # dataset_override/<dataset_key>.yaml sets every per-dataset value.
 # The architecture comes from the pretrained model bundle.
 
-# The pretrained model's task prior (task_prior/<name>.yaml sets it and its
-# worker processes) and TabICL v1 sub-priors; see the pretraining config.
+# The pretrained model's task prior (task_prior/<name>.yaml sets it, its
+# worker processes and max_grad_norm: gradient clipping, null = none, as
+# upstream) and TabICL v1 sub-priors; see the pretraining config.
 prior_type: prior_bag
 batch_size: 8 # batch_size_afa
 sequence_length: 1000 # num_points

@@ -22,7 +22,7 @@ The task priors:
 """
 
 import logging
-from collections.abc import Callable, Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MethodType
 from typing import Any
@@ -66,7 +66,7 @@ class UpstreamAccelerator:
     """
     The part of `accelerate.Accelerator` the vendored code calls.
 
-    With mixed precision, as `Accelerator(mixed_precision="bf16")`,
+    That is `autocast`, `backward` and `clip_grad_norm_`. With mixed precision, as `Accelerator(mixed_precision="bf16")`,
     `autocast` runs its block in bf16 autocast, and inside `prepared` the
     model's forward pass does too, with floating outputs cast back to
     float32. Without it both are plain float32.
@@ -85,6 +85,12 @@ class UpstreamAccelerator:
 
     def backward(self, loss: torch.Tensor) -> None:
         loss.backward()
+
+    def clip_grad_norm_(
+        self, parameters: Iterable[torch.Tensor], max_norm: float
+    ) -> torch.Tensor:
+        """Scale the gradients to a total norm of at most `max_norm`."""
+        return torch.nn.utils.clip_grad_norm_(parameters, max_norm)
 
     @contextmanager
     def prepared(self, model: L2MModel) -> Generator[None]:
@@ -258,8 +264,14 @@ def upstream_config(
     n_validation_tasks: int,
     seed: int,
     device: torch.device,
+    max_grad_norm: float | None = None,
 ) -> dict[str, Any]:
-    """Build the config dictionary the vendored functions read."""
+    """
+    Build the config dictionary the vendored functions read.
+
+    `max_grad_norm` is read only by the patched `predictor_training_step`;
+    `None` leaves gradients unclipped, as upstream.
+    """
     if dataset_key == _UPSTREAM_SIMULATION:
         msg = f"dataset_key={dataset_key!r} would select upstream's simulation"
         raise ValueError(msg)
@@ -272,6 +284,7 @@ def upstream_config(
         "eval_batch_size": n_validation_tasks,
         "train_seed": seed,
         "device": device,
+        "max_grad_norm": max_grad_norm,
     }
 
 

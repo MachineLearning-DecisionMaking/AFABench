@@ -11,6 +11,10 @@ after acquiring it. Every parameter is trained, the policy head at
 temperature. Afterwards the context set is drawn from the validation split
 with the contract seed and packaged with the model as an
 `L2MAFAMethod`.
+
+CHANGE FROM UPSTREAM: with `max_grad_norm` set, every step clips the
+gradient's total norm to it before the optimizer step (upstream does not
+clip in this stage). The task prior's file chooses the value.
 """
 
 import logging
@@ -93,6 +97,7 @@ def train_l2m(
         n_validation_tasks=cfg.n_validation_tasks,
         seed=cfg.seed,
         device=device,
+        max_grad_norm=cfg.max_grad_norm,
     )
     generate_validation_tasks(config, sampler, task="afa")
     accelerator = UpstreamAccelerator(

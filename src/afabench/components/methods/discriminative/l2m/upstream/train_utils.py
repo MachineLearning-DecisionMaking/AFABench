@@ -31,6 +31,10 @@ def predictor_training_step(config, model, sampler, batch, optimizer, scheduler,
 
     # Backwards pass for each acquisition step
     accelerator.backward(total_loss / total_points)
+    # PATCH(afabench): optional gradient-norm clipping, which upstream's
+    # predictor step does not do. Off unless config['max_grad_norm'] is set.
+    if config.get("max_grad_norm") is not None:
+        accelerator.clip_grad_norm_(model.parameters(), config["max_grad_norm"])
     optimizer.step()
     if scheduler is not None:
         scheduler.step()
@@ -81,6 +85,11 @@ def afa_training_step(config, model, sampler, batch, optimizer, scheduler, accel
                 # loss = prediction_loss - config['entropy_weight'] * entropy
 
         accelerator.backward(total_loss / total_actions)
+        # PATCH(afabench): optional gradient-norm clipping, which upstream's
+        # sequential AFA step does not do. Off unless config['max_grad_norm']
+        # is set.
+        if config.get("max_grad_norm") is not None:
+            accelerator.clip_grad_norm_(model.parameters(), config["max_grad_norm"])
         # Compute gradient and update parameters
         # grad_norm = 0.0
         # for name, param in model.selector.named_parameters():

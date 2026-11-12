@@ -5,3 +5,5 @@
 # used. Tasks are made in the fit's own process.
 task_prior: synthetic
 task_workers: 0
+# No gradient clipping, as upstream.
+max_grad_norm: null

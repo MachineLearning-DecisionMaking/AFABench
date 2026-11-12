@@ -33,6 +33,10 @@ Every change is marked in place with a `# PATCH(afabench)` comment:
   `devices=[x.device]`: for features on the CPU that forked the current
   CUDA device, the same with one GPU per job, and failed without CUDA
   (`data_utils.py`).
+- `predictor_training_step` and `afa_training_step` clip the gradient's total
+  norm to `config['max_grad_norm']` before the optimizer step when that key is
+  set to a number (`train_utils.py`). Without it, or with `None`, the steps
+  are upstream's.
 - Code L2M does not use, and whose imports are not dependencies of this
   repository, is removed: the dataset loaders of `data_utils.py` (pandas,
   polars, scikit-learn) and the baseline models of `utils.py` (PyTorch
@@ -41,7 +45,7 @@ Every change is marked in place with a `# PATCH(afabench)` comment:
 What the adapter in the parent package replaces, rather than patches:
 
 - `accelerate.Accelerator(mixed_precision="bf16")` becomes a minimal stand-in
-  with the same `device`, `autocast` and `backward`, and a forward pass
+  with the same `device`, `autocast`, `backward` and `clip_grad_norm_`, and a forward pass
   wrapped in bf16 autocast as `Accelerator.prepare` does.
 - `transformers.get_linear_schedule_with_warmup` becomes an equivalent
   `LambdaLR`.

@@ -7,6 +7,10 @@ on tasks from the configured task prior (`TaskPrior`), with the vendored
 time, from none to all, and sums the classifier loss over the trajectory.
 The learning rate warms up linearly and decays linearly to zero, as
 `transformers.get_linear_schedule_with_warmup`.
+
+CHANGE FROM UPSTREAM: with `max_grad_norm` set, every step clips the
+gradient's total norm to it before the optimizer step (upstream does not
+clip in this stage). The task prior's file chooses the value.
 """
 
 from collections.abc import Callable
@@ -75,6 +79,7 @@ def pretrain_l2m(
         n_validation_tasks=cfg.n_validation_tasks,
         seed=cfg.seed,
         device=device,
+        max_grad_norm=cfg.max_grad_norm,
     )
     generate_validation_tasks(config, sampler, task="predictor")
     accelerator = UpstreamAccelerator(

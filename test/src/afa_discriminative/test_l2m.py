@@ -93,6 +93,7 @@ def _pretraining_config(
     task_prior: TaskPrior = TaskPrior.real_pool,
     prior_type: TabICLPriorType = TabICLPriorType.prior_bag,
     sequence_length: int = SEQUENCE_LENGTH,
+    max_grad_norm: float | None = None,
 ) -> L2MPretrainingConfig:
     return L2MPretrainingConfig(
         **_contract_values(tmp_path, train_dataset),  # pyright: ignore[reportArgumentType]
@@ -117,6 +118,7 @@ def _pretraining_config(
         n_validation_tasks=2,
         pretraining_pool_size=64,
         mixed_precision=mixed_precision,
+        max_grad_norm=max_grad_norm,
     )
 
 
@@ -143,6 +145,7 @@ def _training_config(
     prior_type: TabICLPriorType = TabICLPriorType.prior_bag,
     sequence_length: int = SEQUENCE_LENGTH,
     context_set_size: int = 8,
+    max_grad_norm: float | None = None,
 ) -> L2MTrainingConfig:
     return L2MTrainingConfig(
         **_contract_values(tmp_path),  # pyright: ignore[reportArgumentType]
@@ -165,6 +168,7 @@ def _training_config(
         n_validation_tasks=2,
         pretraining_pool_size=64,
         mixed_precision=False,
+        max_grad_norm=max_grad_norm,
         context_set_size=context_set_size,
     )
 
@@ -211,6 +215,60 @@ def test_pretraining_is_reproducible_from_its_seed(tmp_path: Path) -> None:
         models[0].parameters(), models[1].parameters(), strict=True
     ):
         assert torch.equal(first, second)
+
+
+def _last_gradient_norm(model: L2MModel) -> float:
+    """Total norm of the gradients the model's last fit step left behind."""
+    return (
+        sum(
+            parameter.grad.norm() ** 2
+            for parameter in model.parameters()
+            if parameter.grad is not None
+        )
+        ** 0.5
+    ).item()
+
+
+def test_pretraining_clips_the_gradient_norm_when_asked(
+    tmp_path: Path,
+) -> None:
+    max_grad_norm = 1e-3
+    gradient_norms = {}
+    for name, clip in [("unclipped", None), ("clipped", max_grad_norm)]:
+        (tmp_path / name).mkdir()
+        cfg = _pretraining_config(tmp_path / name, max_grad_norm=clip)
+        model = pretrain_l2m(cfg, inputs=load_inputs(cfg))
+        gradient_norms[name] = _last_gradient_norm(model)
+
+    # Without clipping the gradient is far above the bound, so that the
+    # bound is what holds the clipped run's norm.
+    assert gradient_norms["unclipped"] > 10 * max_grad_norm
+    assert gradient_norms["clipped"] == pytest.approx(max_grad_norm, rel=1e-3)
+
+
+def test_training_clips_the_gradient_norm_when_asked(tmp_path: Path) -> None:
+    max_grad_norm = 1e-3
+    gradient_norms = {}
+    for name, clip in [("unclipped", None), ("clipped", max_grad_norm)]:
+        (tmp_path / name).mkdir()
+        cfg = _training_config(tmp_path / name, max_grad_norm=clip)
+        method = train_l2m(cfg, inputs=load_inputs(cfg))
+        gradient_norms[name] = _last_gradient_norm(method.model)
+
+    # Without clipping the gradient is far above the bound, so that the
+    # bound is what holds the clipped run's norm.
+    assert gradient_norms["unclipped"] > 10 * max_grad_norm
+    assert gradient_norms["clipped"] == pytest.approx(max_grad_norm, rel=1e-3)
+
+
+@pytest.mark.parametrize("max_grad_norm", [0.0, -1.0, float("nan")])
+def test_config_rejects_a_gradient_bound_that_is_not_positive(
+    tmp_path: Path, max_grad_norm: float
+) -> None:
+    with pytest.raises(ValueError, match="max_grad_norm"):
+        _pretraining_config(tmp_path, max_grad_norm=max_grad_norm)
+    with pytest.raises(ValueError, match="max_grad_norm"):
+        _training_config(tmp_path, max_grad_norm=max_grad_norm)
 
 
 def test_pretraining_never_reads_train_labels(tmp_path: Path) -> None:

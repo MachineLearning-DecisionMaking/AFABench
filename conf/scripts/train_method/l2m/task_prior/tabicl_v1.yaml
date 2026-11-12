@@ -5,3 +5,7 @@
 # of use.
 task_prior: tabicl_v1
 task_workers: 4
+# CHANGE FROM UPSTREAM: training clips the gradient's total norm to 1.0, as
+# pretraining does for this task prior. The other task priors do not clip,
+# as upstream.
+max_grad_norm: 1.0

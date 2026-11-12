@@ -5,3 +5,7 @@
 # of use.
 task_prior: tabicl_v1
 task_workers: 4
+# CHANGE FROM UPSTREAM: pretraining clips the gradient's total norm to 1.0.
+# Without it, the validation loss of l2m_better_synth on metabric diverged
+# after about 30,000 steps. The other task priors do not clip, as upstream.
+max_grad_norm: 1.0
