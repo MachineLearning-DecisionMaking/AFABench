@@ -22,9 +22,7 @@ Supporting background, in order of authority when they disagree:
    Acquisition" (Schütz, Wu, Rezvan, Aronsson, Haghir Chehreghani, KDD '26,
    arXiv:2508.14734). Sections 2 and 3 define the problem and the episode
    components; Section 4.3 defines CUBE-NM.
-4. `docs/reference/terminology.md`, an older short note on selections,
-   actions, unmaskers and initializers. `CONTEXT.md` supersedes it.
-5. `docs/reference/pipeline_configuration.md` for pipeline-level terms
+4. `docs/reference/pipeline_configuration.md` for pipeline-level terms
    (method options, method sets, pretrain mappings, hard budgets, soft-budget
    parameters).
 

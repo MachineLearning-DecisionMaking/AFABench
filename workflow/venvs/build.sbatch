@@ -40,7 +40,7 @@ or by hand:
   sbatch -A <account> -p <partition> --output=workflow/venvs/build-%j.log \
       workflow/venvs/build.sbatch .venv-$(uname -m on that partition)
 
-See "Run on a cluster of mixed architectures" in docs/how-to/maintainer/slurm_integration.md.
+See "Run on a cluster of mixed architectures" in docs/how-to/run_on_slurm.md.
 USAGE
     exit 2
 fi

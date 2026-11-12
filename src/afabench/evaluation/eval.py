@@ -324,7 +324,7 @@ def process_batch(
     # `feature_mask`/`masked_features` are mutated in place below, so
     # cloning them is required to avoid mutating caller-owned tensors.
     # Cloning `features` (read-only here) is measurably unnecessary but not
-    # beneficial to remove; see docs/explanation/eval_input_cloning_assessment.md.
+    # beneficial to remove; see GH issue #35.
     features = features.clone()
     feature_mask = initial_feature_mask.clone()
     masked_features = initial_masked_features.clone()

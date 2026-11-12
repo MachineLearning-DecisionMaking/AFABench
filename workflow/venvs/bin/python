@@ -13,7 +13,7 @@ set -eu
 checkout="$(cd "$(dirname "$0")/../../.." && pwd)"
 venv="$checkout/.venv-$(uname -m)"
 if [ ! -x "$venv/bin/python" ]; then
-    echo "No venv for $(uname -m) at $venv; build it with uv run just build-venvs <site> (docs/how-to/maintainer/slurm_integration.md)" >&2
+    echo "No venv for $(uname -m) at $venv; build it with uv run just build-venvs <site> (docs/how-to/run_on_slurm.md)" >&2
     exit 1
 fi
 exec "$venv/bin/python" "$@"

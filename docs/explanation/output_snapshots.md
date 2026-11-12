@@ -3,9 +3,9 @@
 An output snapshot is a copy of everything the pipeline wrote under its
 output root, made so it can be put back where Snakemake expects it. A
 benchmark release is published from a release package prepared from those
-outputs. To make one, see
-[create output snapshots](../how-to/maintainer/create_output_snapshots.md); to put
-it back, [restore an output snapshot](../how-to/maintainer/restore_an_output_snapshot.md).
+outputs. See [save or restore outputs](../how-to/run_pipeline.md#save-or-restore-outputs)
+for local snapshots, or the [release guide](../how-to/manage_releases.md) for
+publishing and reusing results.
 
 ## A snapshot copies everything
 

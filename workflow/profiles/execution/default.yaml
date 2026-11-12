@@ -1,7 +1,7 @@
 # Which stages and methods run on CPU or GPU. Set once; independent of the
 # method set and the cluster. Partitions, accounts and GPU request syntax
 # belong to the site profile's site.yaml. Entries for methods a run does not
-# select are ignored. See docs/how-to/maintainer/run_the_pipeline.md.
+# select are ignored. See docs/how-to/customize_pipeline.md.
 execution:
   defaults:
     classifier_training: cuda

@@ -2,7 +2,7 @@
 
 The [pipeline launcher](../../CONTEXT.md) runs the pipeline from a pipeline
 profile or benchmark config file, an optional site profile and overrides. Steps:
-[run the pipeline](../how-to/maintainer/run_the_pipeline.md).
+[run the pipeline](../how-to/run_pipeline.md).
 
 ```shell
 uv run workflow/run.py [<pipeline> | --configfile <path>] [--site <site>] [-n | -e [<estimate options>] | -i [--group-by <dimensions>]]

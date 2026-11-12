@@ -3,8 +3,7 @@ Dataset overrides may not set training-contract fields.
 
 Snakemake always overrides contract fields on the command line, so a
 contract field set in a dataset override YAML is dead in the pipeline and only
-misleads a developer running the script by hand (see
-`docs/explanation/training_contract_inventory.md`, issue #43). This test covers every
+misleads a developer running the script by hand (see issue #43). This test covers every
 method under `conf/scripts/`. `NOT_YET_PORTED` lists the methods whose
 dataset overrides are known to still set contract fields, pending their
 training-contract port (see the open "Port ... to the training contract

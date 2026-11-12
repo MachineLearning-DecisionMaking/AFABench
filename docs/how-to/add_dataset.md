@@ -1,7 +1,6 @@
 # Add a dataset
 
-For a [repository adopter](../../explanation/user_types.md#repository-adopter):
-implement a dataset and include it in a pipeline profile.
+Implement a dataset and include it in a pipeline profile.
 
 ## 1. Implement the dataset class
 
@@ -67,7 +66,7 @@ For seeded synthetic generation, return `True` from `accepts_seed`, accept
 Keep real-world source order. Do not drop, sort or shuffle instances without
 preserving their source mapping. If `_read_source` drops non-instance CSV
 rows, retain the frame index; follow `MiniBooNEDataset`.
-[Generation indices and source rows](../../../CONTEXT.md#datasets).
+[Generation indices and source rows](../../CONTEXT.md#datasets).
 
 For non-unit feature costs, either set `self.feature_costs` after
 `super().__init__()`, or supply one value per feature in flattened order in
@@ -122,7 +121,7 @@ In the other selected configuration files:
   `conf/scripts/<stage>/<method>/dataset_override/my_dataset.yaml`.
   Use Imagenette's overrides as an image-data example.
 
-[Pipeline configuration](../../reference/pipeline_configuration.md).
+[Pipeline configuration](../reference/pipeline_configuration.md).
 
 ## 5. Record redistribution policy
 
@@ -134,7 +133,7 @@ Set `status` to `permitted`, `restricted` or `unreviewed`. Use
 `bundle_policy: include` only with a permitted review; otherwise use `omit`
 and an `omission_reason`. For synthetic data intended for local regeneration,
 record that reason rather than a redistribution restriction.
-[Policy fields](../../reference/release_manifest.md#dataset-redistribution).
+[Policy fields](../reference/release_manifest.md#dataset-redistribution).
 
 ## 6. Add plot labels and documentation
 
@@ -144,7 +143,7 @@ Optionally add the key to named `dataset_sets` in
 `workflow/conf/dataset_sets/<variant>.yaml`; do not configure the automatic `all` set.
 
 Write and index a dataset reference page using the
-[dataset template](../../reference/datasets/README.md).
+[dataset template](../reference/datasets/README.md).
 
 ## 7. Test the dataset
 
@@ -162,4 +161,4 @@ uv run just qa
 ```
 
 To evaluate release methods on it, continue with
-[add a dataset to a release](add_dataset_to_a_release.md).
+[extend a release](manage_releases.md#extend-a-release).

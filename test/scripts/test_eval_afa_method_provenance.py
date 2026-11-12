@@ -314,7 +314,7 @@ def test_evaluation_table_drops_internal_bookkeeping_columns(
 def test_training_settings_missing_from_the_method_record_are_null(
     eval_inputs: EvalInputs, tmp_path: Path
 ) -> None:
-    # A record built by hand, as `docs/how-to/repository_adopter/add_method.md` allows, need
+    # A record built by hand, as `docs/how-to/add_method.md` allows, need
     # not carry the training contract's budgets
     save_bundle(
         RandomWithoutClassifierAFAMethod(n_classes=8),

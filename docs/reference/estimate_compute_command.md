@@ -3,7 +3,7 @@
 `uv run workflow/run.py -e` or `uv run just estimate-compute`
 (`scripts/compute_estimate/estimate_compute.py`) prints the [compute estimate](../../CONTEXT.md) of a pipeline invocation
 ([ADR 0007](../adr/0007-job-records-beside-artifacts.md)). Steps:
-[estimate the compute of a run](../how-to/maintainer/estimate_compute.md).
+[estimate the compute of a run](../how-to/estimate_compute.md).
 
 ```shell
 uv run workflow/run.py -e [--job-durations PATH] [--by COLUMN ...]

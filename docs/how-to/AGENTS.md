@@ -1,12 +1,12 @@
 # How-to editing rules
 
 Apply these rules when creating, editing, splitting or moving any guide under
-`docs/how-to/`. Follow the layout and audience rules in
+`docs/how-to/`. Follow the task-based layout in
 [`../README.md`](../README.md).
 
 ## Write a procedure
 
-- Start with the intended reader and task, then give the steps.
+- Start with the task and prerequisites, then give the steps.
 - Use action headings and imperative instructions. Put commands, paths and
   expected checks beside the step that needs them.
 - Keep only prerequisites, decisions, actions, verification and warnings

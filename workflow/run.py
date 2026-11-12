@@ -517,7 +517,7 @@ def check_site_venvs(arguments: list[str], checkout: Path = REPO_ROOT) -> None:
         if (problem := venv_problem(checkout, venv)) is not None
     ]
     if problems:
-        message = f"{'; '.join(problems)}. Build the site's venvs with `uv run just build-venvs {site}` (docs/how-to/maintainer/slurm_integration.md) before executing jobs"
+        message = f"{'; '.join(problems)}. Build the site's venvs with `uv run just build-venvs {site}` (docs/how-to/run_on_slurm.md) before executing jobs"
         if _planning_only(arguments):
             typer.echo(
                 f"Warning: {message}. Continuing planning in the checkout environment; this does not certify execution readiness.",

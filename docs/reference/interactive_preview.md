@@ -4,7 +4,7 @@ The [interactive preview](../../CONTEXT.md) browses the
 [pipeline plan](../../CONTEXT.md) of one pipeline invocation in the terminal.
 The [pipeline launcher](pipeline_launcher_command.md#the-interactive-preview)
 opens it with `-i` (`--interactive-preview`); steps:
-[run the pipeline](../how-to/maintainer/run_the_pipeline.md#inspect-planned-work).
+[run the pipeline](../how-to/run_pipeline.md#inspect-planned-work-and-failures).
 
 ## Statuses
 
@@ -25,7 +25,7 @@ stage that is off, is no job of the plan: a job reading it lists it under
 `Existing inputs`. Released outputs on datasets that exist are checked
 while planning and are `Reuse`; existing dataset content that differs from
 the release's record fails planning. Why the preview reuses conditionally:
-[previewing a run over a release](../explanation/benchmark_releases.md#previewing-a-run-over-a-release).
+[previewing a release extension](../how-to/manage_releases.md#preview-and-investigate-unexpected-work).
 
 ## Reasons
 

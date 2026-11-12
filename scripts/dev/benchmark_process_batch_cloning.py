@@ -6,8 +6,7 @@ Benchmark the input-cloning overhead in `process_batch`'s entry point.
 tensors they pass in. This script measures how much of end-to-end batch
 evaluation time those three clones actually account for, on representative
 workload sizes, to support an evidence-based decision on whether removing any
-of them would be worthwhile. See docs/explanation/eval_input_cloning_assessment.md for
-the recorded results and decision (GH issue #35).
+of them would be worthwhile. See GH issue #35 for the investigation.
 
 Usage:
     uv run python scripts/dev/benchmark_process_batch_cloning.py

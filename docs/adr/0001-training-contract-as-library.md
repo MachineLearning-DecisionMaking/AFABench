@@ -6,7 +6,7 @@ status: accepted
 
 Every pretraining and training script re-declared and re-handled the same
 pipeline inputs, and the copies drifted into bugs (see
-`docs/explanation/training_contract_inventory.md`, issue #43). We fix this by defining a
+[issue #43](https://github.com/MachineLearning-DecisionMaking/AFABench/issues/43)). We fix this by defining a
 **training contract**, the fixed inputs the pipeline passes and the bundle it
 expects back at `save_path`, and by offering optional helpers that scripts
 call. We do not dispatch all methods through one script. The only hard rule

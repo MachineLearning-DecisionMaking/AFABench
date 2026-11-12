@@ -1,13 +1,9 @@
 # Pipeline configuration
 
-The pipeline uses [Snakemake](https://snakemake.readthedocs.io/) for workflow orchestration and parallelization. This means dependencies are automatically tracked, and jobs are only rerun if their inputs change.
-
-The whole pipeline is executable with the following command:
-```shell
-uv run workflow/run.py --jobs 8 execution_file=workflow/profiles/execution/cpu.yaml
-```
-
-This will attempt to run 8 jobs in parallel locally on your computer, in order to produce everything that the `all` [rule](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html) requires. The `all` rule is the final target that orchestrates the entire pipeline: it generates datasets, trains classifiers, pretrains models, trains methods, evaluates them, and produces final plots. We also support [SLURM integration](../how-to/maintainer/slurm_integration.md). The command is the [pipeline launcher](pipeline_launcher_command.md); the configuration keys below are its `key=value` overrides.
+Configuration keys accepted by the [pipeline launcher](pipeline_launcher_command.md)
+as `key=value` overrides. For the moving parts, see the
+[pipeline overview](../explanation/pipeline.md); for recipes, see
+[customize the pipeline](../how-to/customize_pipeline.md).
 
 ## Configuration overview
 
@@ -20,7 +16,7 @@ Configuration files are organized into subdirectories under
 profiles say only what to run; where to run it is a site profile under
 `workflow/profiles/site/`, and which jobs use a GPU is the execution file
 under `workflow/profiles/execution/`
-([Run the pipeline](../how-to/maintainer/run_the_pipeline.md)).
+([Run the pipeline](../how-to/run_pipeline.md)).
 Below we discuss the meaning of each configuration group.
 
 ## Runtime configuration options
@@ -103,7 +99,7 @@ taxonomy or the selected method list, and a `cuda` job never falls back to
 CPU. `cuda` both passes `device=cuda` to the script and requests a GPU
 allocation; `cpu` passes `device=cpu` and requests none. Partitions and
 accounts never belong in these files; the site profile owns them
-([SLURM integration](../how-to/maintainer/slurm_integration.md)).
+([SLURM integration](../how-to/run_on_slurm.md)).
 
 ### `--jobs` (launcher option)
 
@@ -122,7 +118,7 @@ Enables or disables [Weights & Biases](https://wandb.ai/) integration for loggin
 - **Requirement:** You must run `uv run wandb login` before using W&B, and set
   the `WANDB_ENTITY` and `WANDB_PROJECT` environment variables, or the run
   fails before any job. The terminal links each job's W&B run with them
-  ([Log to Weights & Biases](../how-to/maintainer/run_the_pipeline.md#log-to-weights--biases)).
+  ([Log to Weights & Biases](../how-to/run_pipeline.md#log-to-weights--biases)).
 - **Requirement:** [`wandb_group`](#wandb_group) must be set too; the launcher sets it.
 
 ### `wandb_group`
@@ -205,7 +201,7 @@ Turns whole pipeline stages off. A stage that is off defines no rules, so the ru
   reuse of missing datasets, conditional on content validation after generation.
   The internal `release_preview` switch is refused during execution. See the
   [launcher](pipeline_launcher_command.md) and
-  [adopter workflow](../how-to/repository_adopter/add_method_to_a_release.md).
+  [release guide](../how-to/manage_releases.md#extend-a-release).
 
 ### `per_dataset_plots`
 

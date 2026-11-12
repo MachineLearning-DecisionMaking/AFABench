@@ -9,78 +9,13 @@ Compare state-of-the-art algorithms for sequential feature selection in
 scenarios where acquiring features is costly. Includes implementations of
 multiple AFA methods, standardized datasets, and automated evaluation pipelines.
 
-## Choose how to use AFABench
+## Start here
 
-AFABench is one project with two usage modes:
-
-| Your goal | Use | Start here |
-| --- | --- | --- |
-| Reuse components in your own Python code | **AFABench library**: `import afabench`; no benchmark pipeline invocation needed | [Install and use the library](docs/how-to/library_user/use_the_library.md) |
-| Run or extend configured benchmark experiments | **Benchmark pipeline**: `uv run workflow/run.py` from a repository checkout | [Pipeline setup](#benchmark-pipeline-setup) below |
-
-The Python distribution and import namespace are both `afabench`. The wheel
-contains the library, not the repository's launcher, workflows, scripts or
-configs; installing it does not provide a standalone benchmark command.
-Install from the repository using the library guide; AFABench is not
-published on PyPI. Library installation currently also installs pipeline
-dependencies; separating them is tracked in
-[#163](https://github.com/MachineLearning-DecisionMaking/AFABench/issues/163).
-
-For tables and plots without installing AFABench, see
-[Download published results](docs/how-to/results_only_user/download_published_results.md).
-For the audience distinctions, see [User types](docs/explanation/user_types.md).
-
-## Benchmark pipeline setup
-
-### Check prerequisites
-
-Required:
-
-- **OS**: Linux (x86_64 or aarch64). macOS is untested. Native Windows is
-  not supported; WSL2 is untested.
-- **bash** on `PATH`. Pipeline jobs run their commands with it.
-- **git**, to clone the repository.
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/) 0.10.2 or
-  newer.** uv installs the exact Python version (3.12.10) and the locked
-  dependencies, so you don't need to install Python yourself.
-
-Only for some setups:
-
-- **GPU execution**: an NVIDIA GPU and its host drivers.
-- **Cluster execution**: the site's SLURM. See
-  [Run on SLURM](docs/how-to/maintainer/slurm_integration.md).
-- **NixOS**: enter `nix develop` before running `uv sync`. The flake provides
-  Git, development tools, a launcher Python and runtime libraries for native
-  Python wheels on x86_64 and aarch64 Linux. With direnv installed, run
-  `direnv allow` to activate the flake automatically. Other hosts do not need
-  the flake.
-
-### Install the checkout
-
-```bash
-# Clone repository
-git clone https://github.com/MachineLearning-DecisionMaking/AFABench.git
-cd AFABench
-
-# Install dependencies with uv
-uv sync
-```
-
-### Run the benchmark pipeline
-
-Local execution is not recommended for reproducing the full benchmark because
-the pipeline generates a large number of jobs. If you still want to run it
-locally with 8 CPU cores, execute this command from the repo root:
-
-```shell
-uv run workflow/run.py --jobs 8 execution_file=workflow/profiles/execution/cpu.yaml
-```
-
-The CPU execution file runs every job on CPU. To reproduce the full
-benchmark results, use SLURM instead: one command submits CPU and GPU jobs
-together. See the
-[run the pipeline](docs/how-to/maintainer/run_the_pipeline.md) guide
-for the exact command.
+- [Set up AFABench](docs/how-to/setup.md).
+- [Run the pipeline](docs/how-to/run_pipeline.md).
+- [Understand and customize it](docs/explanation/pipeline.md).
+- [Run on SLURM](docs/how-to/run_on_slurm.md).
+- [Download or extend published results](docs/how-to/manage_releases.md).
 
 ## Features
 
@@ -154,14 +89,9 @@ page in [`docs/reference/datasets/`](docs/reference/datasets/README.md).
 
 ## Documentation
 
-The full index is [`docs/README.md`](docs/README.md). To get started:
-  - [Install and use the library](docs/how-to/library_user/use_the_library.md)
-  - [Run the pipeline](docs/how-to/maintainer/run_the_pipeline.md)
-  - [Pipeline configuration](docs/reference/pipeline_configuration.md)
-  - [Add a dataset](docs/how-to/repository_adopter/add_dataset.md)
-  - [Add a method](docs/how-to/repository_adopter/add_method.md)
-  - [Add a method to a release](docs/how-to/repository_adopter/add_method_to_a_release.md)
-  - [Download published results](docs/how-to/results_only_user/download_published_results.md)
+See the [documentation index](docs/README.md) for guides and references,
+including [adding a dataset](docs/how-to/add_dataset.md) or
+[adding a method](docs/how-to/add_method.md).
 
 ## Development
 

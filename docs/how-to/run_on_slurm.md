@@ -1,8 +1,8 @@
 # Run on SLURM
 
-For a [maintainer](../../explanation/user_types.md#maintainer):
-configure a site profile and submit from an authorized host with shared
-repository, environment, input and output storage.
+Configure a site profile and submit from one authorized host with shared
+repository, environment, input and output storage. Keep the controller alive
+with `tmux` or your site's approved mechanism. Use one cluster per invocation.
 
 ## 1. Adapt a profile to your site
 
@@ -44,7 +44,7 @@ permitted before running; that behavior is unverified.
 Set `mem_mb` and `cpus_per_task` in the profile's `default-resources` or
 `set-resources`. Keep partition, account and GPU requests in `site.yaml`.
 Set hours-based walltime there using the
-[walltime fields](../../reference/requested_walltime.md#fields).
+[walltime fields](../reference/requested_walltime.md#fields).
 Remove profile `set-resources.*.runtime` values that would shadow that table.
 
 ## 3. Check requested walltime before submission
@@ -54,12 +54,21 @@ uv run workflow/run.py kdd26 --site my_site -i
 ```
 
 Check each job's Device, CPUs, GPUs, Placement and Time limit in minutes
-([job details](../../reference/interactive_preview.md#panes)).
+([job details](../reference/interactive_preview.md#panes)).
 Use measured durations with a safety margin. For a one-run override, append
 `-- --set-resources pretrain_model:runtime=240`.
 
 Remove `-i` to submit. Keep the controller alive using the site's approved
-mechanism. [Pipeline commands](run_the_pipeline.md).
+mechanism. [Pipeline commands](run_pipeline.md).
+
+## Check CPU/GPU choices
+
+Choose the execution file using the [customization guide](customize_pipeline.md#choose-cpus-or-gpus).
+It selects job devices; `site.yaml` supplies the corresponding allocations.
+Dataset generation, transformation, aggregation and visualization always
+use the CPU allocation. Check that these jobs request no GPUs and have
+suitable CPU and memory limits; do not run processing on a login node
+outside site policy.
 
 ## Run on a cluster of mixed architectures
 

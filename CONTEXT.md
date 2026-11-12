@@ -414,18 +414,17 @@ _Avoid_: Shared input, common artifact
 A user who forks the repository, adds their own method, and runs the
 pipeline over a downloaded benchmark release, so only their method is
 trained and evaluated while the published methods' outputs are reused
-(see `docs/explanation/user_types.md`).
+(see `docs/how-to/manage_releases.md`).
 _Avoid_: Benchmark adopter, adopter
 
 **Library user**:
 A user who imports AFABench's library code, such as its evaluation
-functions or models, into their own code base and never runs its pipeline
-(see `docs/explanation/user_types.md`).
+functions or models, into their own code base and never runs its pipeline.
 _Avoid_: Independent evaluator, package user
 
 **Results-only user**:
 A user who downloads a benchmark release's tables or plots without
-installing AFABench (see `docs/explanation/user_types.md`).
+installing AFABench (see `docs/how-to/manage_releases.md`).
 _Avoid_: Results-only researcher, results-only journey
 
 **Pipeline stage**:

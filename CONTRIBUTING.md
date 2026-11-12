@@ -5,12 +5,7 @@ repository, human or AI agent.
 
 ## Setup
 
-Meet the [prerequisites](README.md#prerequisites), then:
-
-```bash
-# Install dependencies
-uv sync
-```
+Follow the [setup guide](docs/how-to/setup.md).
 
 ## Before opening a PR
 

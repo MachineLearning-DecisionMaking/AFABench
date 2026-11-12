@@ -1,7 +1,6 @@
 # Add a method
 
-For a [repository adopter](../../explanation/user_types.md#repository-adopter):
-implement a method, register it, and run it through the pipeline.
+Implement a method, register it, and run it through the pipeline.
 
 ## 1. Implement the method class
 
@@ -20,7 +19,7 @@ Use `src/afabench/components/methods/dummy/with_classifier.py` as a complete
 example. Use `save_classifier` and `load_classifier` for a bundled classifier.
 Register each new method or classifier class in `REGISTERED_CLASSES` in
 `src/afabench/core/registry.py`.
-[Bundle format](../../reference/bundle_format.md).
+[Bundle format](../reference/bundle_format.md).
 
 ## 2. Write the training script and config
 
@@ -81,7 +80,7 @@ defaults:
   - override hydra/launcher: custom_slurm
 ```
 
-Follow [`conf/components/README.md`](../../../conf/components/README.md)
+Follow [`conf/components/README.md`](../../conf/components/README.md)
 when composing Hydra groups.
 
 ### Use a script without Hydra or the helpers
@@ -155,7 +154,7 @@ soft_budget_params:
 
 Keep a `soft_budget_params` entry even for hard-budget-only methods. Choose
 values and opt-ins appropriate to your method.
-[Method options](../../reference/pipeline_configuration.md#method-option-keys-and-validation).
+[Method options](../reference/pipeline_configuration.md#method-option-keys-and-validation).
 
 Optionally add the name to `method_sets/<variant>.yaml`.
 Add its display name, policy family and any new family colours in
@@ -187,4 +186,4 @@ uv run workflow/run.py --jobs 8 \
 
 Run `uv run just qa` before committing. For a production run, remove `smoke_test=true`
 and select the intended datasets, realizations and
-[execution settings](../maintainer/mixed_execution.md).
+[execution settings](customize_pipeline.md#choose-cpus-or-gpus).
