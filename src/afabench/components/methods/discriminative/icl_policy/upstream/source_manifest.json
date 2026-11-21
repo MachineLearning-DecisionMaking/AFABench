@@ -1,0 +1,79 @@
+{
+  "repository": "https://github.com/soda-inria/tabicl",
+  "commit": "c91f00df184a5097e584cb376f7e699e9f3444c4",
+  "version": "2.2.0",
+  "files": {
+    "__init__.py": {
+      "source": "src/tabicl/_model/__init__.py",
+      "sha256": "c24eccee285dd1c5dea721708cd3e52501fe39f29a865fb6cd3d8b448a33ad4f"
+    },
+    "_cgroup_memory.py": {
+      "source": "src/tabicl/_model/_cgroup_memory.py",
+      "sha256": "161bc6813d8e15c657bff0ce169b6b16230fe76e24516737eb341c73953a1495"
+    },
+    "attention.py": {
+      "source": "src/tabicl/_model/attention.py",
+      "sha256": "2406a52571ce33392b003aca185550bc33a8e55797de72bdbf8b4449b09e66f8"
+    },
+    "embedding.py": {
+      "source": "src/tabicl/_model/embedding.py",
+      "sha256": "a0c562600fe22944f91b1b71b706198cb9a4c3d9d8aaba67a86f35a85493d322"
+    },
+    "encoders.py": {
+      "source": "src/tabicl/_model/encoders.py",
+      "sha256": "a3e0e9bde47e7f587c4a196d124ea631e25755d4f5ac5d6a8568618a4e299a4e"
+    },
+    "inference.py": {
+      "source": "src/tabicl/_model/inference.py",
+      "sha256": "f9e3cf0d83047e06df7d6763bb8d8ee7a00ff1ba6708299a14635831f60ba4fc"
+    },
+    "inference_config.py": {
+      "source": "src/tabicl/_model/inference_config.py",
+      "sha256": "852abb9cf97e9c82ae42a92b034581f6e9131f3bec70efbd3ce068ac92a77a37"
+    },
+    "interaction.py": {
+      "source": "src/tabicl/_model/interaction.py",
+      "sha256": "6f35b5a70cd7b7ea44286faa8921b64c2cc83aca8ed49a4ad8b287abe54cbf27"
+    },
+    "kv_cache.py": {
+      "source": "src/tabicl/_model/kv_cache.py",
+      "sha256": "a7942448631e1770455c826ae159176725f98d2eefc874101c8687f605c57bd8"
+    },
+    "layers.py": {
+      "source": "src/tabicl/_model/layers.py",
+      "sha256": "96cce2e84db33e176d872c7bb7c0df8c305de3eb7a02fcad9f1128f33d319d95"
+    },
+    "learning.py": {
+      "source": "src/tabicl/_model/learning.py",
+      "sha256": "7549dff09c3796a3cb0b55ea03e249342392fa601a681526f7b1efb6a6f1eef2"
+    },
+    "quantile_dist.py": {
+      "source": "src/tabicl/_model/quantile_dist.py",
+      "sha256": "7e09ac0c3ce0260dc07cef79b0a98ee63b0785efafbf415fd243fe2981499b99"
+    },
+    "rope.py": {
+      "source": "src/tabicl/_model/rope.py",
+      "sha256": "f59874106743b58330f35699df27ad8d45d4ae692b38c64626f58cdf2da12eab"
+    },
+    "ssmax.py": {
+      "source": "src/tabicl/_model/ssmax.py",
+      "sha256": "29b3955e2597446cdcfe70f2084a70faa959f0ef510a27ac0668e58943d3d639"
+    },
+    "tabicl.py": {
+      "source": "src/tabicl/_model/tabicl.py",
+      "sha256": "583786e5ffd70b9eb425bca8e52aed415dadcdf4254c908b3b6fa52026a56491"
+    },
+    "_torch_devices.py": {
+      "source": "src/tabicl/_torch_devices.py",
+      "sha256": "badd87f5f62a03add8efd5f101ad7d67634cf7808ec4b104d5f7cb1c3b774942"
+    },
+    "preprocessing.py": {
+      "source": "src/tabicl/_sklearn/preprocessing.py",
+      "sha256": "2163a3bf6754127365a7aedac854d99a6f565545cc1ea7e63c68a596081b2976"
+    },
+    "sklearn_utils.py": {
+      "source": "src/tabicl/_sklearn/sklearn_utils.py",
+      "sha256": "e5639073a9c80bcaf13c1b59de424be76f17d4e66418f74ff0c41840920d54b2"
+    }
+  }
+}

@@ -7,6 +7,8 @@
 # )
 
 REGISTERED_CLASSES = {
+    "L2MTabICLAFAMethod": "afabench.components.methods.discriminative.l2m_tabicl.afa_methods.L2MTabICLAFAMethod",
+    "L2MTabICLBackboneAFAMethod": "afabench.components.methods.discriminative.l2m_tabicl_backbone.afa_methods.L2MTabICLBackboneAFAMethod",
     # AFA Method Classes
     "L2MAFAMethod": "afabench.components.methods.discriminative.l2m.afa_methods.L2MAFAMethod",
     "RLAFAMethod": "afabench.components.methods.rl.common.afa_methods.RLAFAMethod",
