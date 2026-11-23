@@ -52,28 +52,16 @@ class DirectUnmasker(AFAUnmasker):
 
         # Get batch shape by removing the last dimension (which is 1)
         batch_shape = afa_selection.shape[:-1]
+        selection = afa_selection.reshape(-1, 1)
+        new_feature_mask_flat = feature_mask.reshape(
+            len(selection), feature_shape.numel()
+        ).clone()
+        index = selection.clamp(min=0)
+        current = new_feature_mask_flat.gather(1, index)
+        new_feature_mask_flat.scatter_(
+            1,
+            index,
+            torch.where(selection >= 0, torch.ones_like(current), current),
+        )
 
-        # Flatten batch dimensions for processing
-        afa_selection_flat = afa_selection.view(-1, 1)
-        feature_mask_flat = feature_mask.view(-1, *feature_shape)
-
-        feature_indices = afa_selection_flat.squeeze(1)
-
-        new_feature_mask_flat = feature_mask_flat.clone()
-
-        # Only unmask features where selection >= 0 (selection < 0 is ignored)
-        valid_selections = afa_selection_flat.squeeze(1) >= 0
-        if valid_selections.any():
-            valid_feature_indices = feature_indices[valid_selections]
-            valid_batch_indices = torch.arange(
-                feature_mask_flat.size(0), device=feature_mask.device
-            )[valid_selections]
-
-            # Convert feature_indices to n-dimensional indices using unravel_index
-            multi_indices = torch.unravel_index(
-                valid_feature_indices, feature_shape
-            )
-            new_feature_mask_flat[valid_batch_indices, *multi_indices] = True
-
-        # Reshape back to original batch shape + feature shape
         return new_feature_mask_flat.view(batch_shape + feature_shape)

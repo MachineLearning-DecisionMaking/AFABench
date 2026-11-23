@@ -46,6 +46,13 @@ class RandomInitializer(AFAInitializer):
             f"[0, {num_features}]"
         )
 
+        if num_features_to_unmask == 0:
+            return torch.zeros(
+                batch_shape + feature_shape,
+                dtype=torch.bool,
+                device=features.device,
+            )
+
         # Create different random masks for each batch element
         masks = []
         for _ in range(batch_size):

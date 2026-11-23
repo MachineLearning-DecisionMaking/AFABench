@@ -8,6 +8,11 @@ from torch import nn
 from afabench.components.methods.generative.eddi.afa_methods import (
     EDDIAFAMethod,
 )
+from afabench.components.methods.rl.odin.models import (
+    PartialVAE,
+    PointNet,
+    PointNetType,
+)
 from afabench.core.types import (
     AFAClassifier,
     ClassifierOutputKind,
@@ -31,6 +36,18 @@ class FakeSampler(nn.Module):
         batch_size = masked_features.shape[0]
         z = torch.zeros(batch_size, 3, device=masked_features.device)
         return z, z, z, z, masked_features
+
+
+def tiny_partial_vae(n_features: int, n_classes: int) -> PartialVAE:
+    pointnet = PointNet(
+        identity_size=4,
+        n_features=n_features + n_classes,
+        feature_map_encoder=nn.Linear(5, 3),
+        pointnet_type=PointNetType.POINTNET,
+    )
+    return PartialVAE(
+        pointnet, nn.Linear(3, 6), nn.Linear(3, n_features), latent_size=3
+    )
 
 
 class FakePredictor(nn.Module):
@@ -109,7 +126,7 @@ def test_eddi_predict_flattens_image_features() -> None:
 
 def test_eddi_act_supports_synthetic_mnist_patch_selection() -> None:
     method = EDDIAFAMethod(
-        sampler=FakeSampler(),
+        sampler=tiny_partial_vae(n_features=784, n_classes=2),
         predictor=FakePredictor(),
         num_classes=2,
         selection_costs=torch.ones(49),

@@ -41,7 +41,9 @@ class ConcreteMask(nn.Module):
 
     @override
     def forward(self, x: torch.Tensor, temp: float) -> torch.Tensor:
-        dist = RelaxedOneHotCategorical(temp, logits=self.logits / self.gamma)
+        dist = RelaxedOneHotCategorical(
+            temp, logits=self.logits / self.gamma, validate_args=False
+        )
         sample = dist.rsample([len(x)])
         m = sample.max(dim=1).values
         out = x * m
@@ -71,7 +73,9 @@ class ConcreteMask2d(nn.Module):
 
     @override
     def forward(self, x: torch.Tensor, temp: float) -> torch.Tensor:
-        dist = RelaxedOneHotCategorical(temp, logits=self.logits / self.gamma)
+        dist = RelaxedOneHotCategorical(
+            temp, logits=self.logits / self.gamma, validate_args=False
+        )
         sample = dist.rsample([len(x)])
         m = sample.max(dim=1).values
         m = self.upsample(m.reshape(-1, 1, self.width, self.width))
@@ -161,7 +165,7 @@ class DifferentiableSelector(nn.Module):
             for epoch in range(nepochs):
                 # Switch model to training mode.
                 model.train()
-                epoch_train_loss = 0.0
+                epoch_train_loss = torch.zeros((), device=device)
                 train_batches = 0
 
                 for x_batch, y_batch in train_loader:
@@ -182,9 +186,9 @@ class DifferentiableSelector(nn.Module):
                     opt.step()
                     model.zero_grad()
                     selector_layer.zero_grad()
-                    epoch_train_loss += loss.item()
+                    epoch_train_loss += loss.detach()
 
-                train_loss = epoch_train_loss / train_batches
+                train_loss = epoch_train_loss.item() / train_batches
 
                 # Reinitialize logits as necessary.
                 logits = selector_layer.logits

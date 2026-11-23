@@ -93,6 +93,8 @@ method_options:
     hard_budget_ignored_datasets: [actg, bank_marketing, ckd, cube, cube_nm, cube_nm_without_noise, cube_nonuniform_costs, cube_without_noise, diabetes, fashion_mnist, imagenette, miniboone, mnist, physionet_challenge_2012, synthetic_mnist, synthetic_mnist_without_noise]
   cae:
     train_script_name: "cae"
+    eval_batch_size:
+      default: 256
     train_hard_budget: {cube_nonuniform_costs: 20}
     hard_budget_ignored_datasets: [cube_nm, cube_nm_without_noise, imagenette, synthetic_mnist, synthetic_mnist_without_noise]
     soft_budget_datasets: [
@@ -101,6 +103,8 @@ method_options:
       mnist, physionet_challenge_2012]
   permutation:
     train_script_name: "permutation"
+    eval_batch_size:
+      default: 256
     train_hard_budget: {cube_nonuniform_costs: 20}
     hard_budget_ignored_datasets: [cube_nm, cube_nm_without_noise, imagenette, synthetic_mnist, synthetic_mnist_without_noise]
     soft_budget_datasets: [

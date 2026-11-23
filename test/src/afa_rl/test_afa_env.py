@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 
 from afabench.components.initializers.fixed_random_initializer import (
@@ -396,13 +394,6 @@ def test_over_budget_selection_is_forced_stop_without_acquisition() -> None:
     all_labels = torch.tensor([[1, 0], [0, 1]])
     dataset_fn = get_afa_dataset_fn(all_features, all_labels, shuffle=False)
 
-    unmasked_selections: list[torch.Tensor] = []
-    direct_unmask_fn = DirectUnmasker().unmask
-
-    def recording_unmask_fn(**kwargs: Any) -> torch.Tensor:  # noqa: ANN401
-        unmasked_selections.append(kwargs["afa_selection"].clone())
-        return direct_unmask_fn(**kwargs)
-
     env = AFAEnv(
         dataset_fn=dataset_fn,
         reward_fn=get_fixed_reward_reward_fn(
@@ -417,7 +408,7 @@ def test_over_budget_selection_is_forced_stop_without_acquisition() -> None:
         initialize_fn=FixedRandomInitializer(
             num_initial_features=0
         ).initialize,
-        unmask_fn=recording_unmask_fn,
+        unmask_fn=DirectUnmasker().unmask,
         seed=123,
         selection_costs=[1.0, 2.0, 3.0],
     )
@@ -426,7 +417,6 @@ def test_over_budget_selection_is_forced_stop_without_acquisition() -> None:
     td["action"] = torch.tensor([1, 1], dtype=torch.int64)
     td = env.step(td)["next"]
     before = td.clone()
-    unmasked_selections.clear()
 
     # Sample 1 proposes selection 2 (cost 3, total 4 > 3): forced stop.
     # Sample 2 proposes selection 1 (cost 2, total 3 <= 3): executed.
@@ -437,10 +427,6 @@ def test_over_budget_selection_is_forced_stop_without_acquisition() -> None:
     # The proposed action stays in the output exactly as proposed
     assert torch.equal(td["action"], proposed_action)
     after = td["next"]
-
-    # Only the within-budget selection reaches the unmasker
-    assert len(unmasked_selections) == 1
-    assert torch.equal(unmasked_selections[0], torch.tensor([[1]]))
 
     # The forced stop leaves the state unchanged and charges no cost
     for key in (

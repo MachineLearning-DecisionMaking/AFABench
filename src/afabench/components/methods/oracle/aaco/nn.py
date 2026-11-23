@@ -51,76 +51,6 @@ def _build_selection_mask(
     return torch.zeros(selection_size, dtype=torch.bool, device=device)
 
 
-def _init_rollout_state(
-    x_flat: torch.Tensor,
-    feature_shape: torch.Size,
-    selection_size: int,
-    initializer: AFAInitializer,
-    device: torch.device,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
-    x_view = x_flat.view(feature_shape) if len(feature_shape) > 1 else x_flat
-    feature_mask_structured = initializer.initialize(
-        features=x_view.unsqueeze(0),
-        label=None,
-        feature_shape=feature_shape,
-    ).squeeze(0)
-    feature_mask_structured = feature_mask_structured.to(device)
-    masked_features_structured = x_view * feature_mask_structured.float()
-    feature_mask_flat = feature_mask_structured.reshape(-1)
-    masked_features_flat = masked_features_structured.reshape(-1)
-    selection_mask = _build_selection_mask(
-        feature_mask_structured, selection_size, feature_shape, device
-    )
-    return (
-        x_view,
-        feature_mask_structured,
-        masked_features_structured,
-        feature_mask_flat,
-        masked_features_flat,
-        selection_mask,
-    )
-
-
-def _apply_selection(
-    selection_idx: int,
-    *,
-    x_view: torch.Tensor,
-    selection_mask: torch.Tensor,
-    feature_mask_structured: torch.Tensor,
-    masked_features_structured: torch.Tensor,
-    unmasker: AFAUnmasker,
-    feature_shape: torch.Size,
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    selection_mask[selection_idx] = True
-    new_feature_mask_structured = unmasker.unmask(
-        masked_features=masked_features_structured.unsqueeze(0),
-        feature_mask=feature_mask_structured.unsqueeze(0),
-        features=x_view.unsqueeze(0),
-        afa_selection=torch.tensor([[selection_idx]], device=device),
-        selection_mask=selection_mask.unsqueeze(0),
-        label=None,
-        feature_shape=feature_shape,
-    ).squeeze(0)
-    feature_mask_structured = new_feature_mask_structured
-    masked_features_structured = x_view * feature_mask_structured.float()
-    feature_mask_flat = feature_mask_structured.reshape(-1)
-    masked_features_flat = masked_features_structured.reshape(-1)
-    return (
-        feature_mask_structured,
-        masked_features_structured,
-        feature_mask_flat,
-        masked_features_flat,
-    )
-
-
 def generate_aaco_rollouts(
     aaco_method: AACOAFAMethod,
     features: torch.Tensor,
@@ -130,6 +60,7 @@ def generate_aaco_rollouts(
     initializer: AFAInitializer | None = None,
     max_acquisitions: int | None = None,
     device: torch.device | None = None,
+    rollout_batch_size: int = 256,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Generate expert rollouts from an AACO oracle.
@@ -168,93 +99,79 @@ def generate_aaco_rollouts(
 
     selection_size = unmasker.get_n_selections(feature_shape=feature_shape)
 
-    # Lists to collect rollout data
-    all_masked_features = []
-    all_feature_masks = []
-    all_actions = []
-
-    logger.info(f"Generating rollouts for {n_samples} samples...")
-
     if initializer is None:
         initializer = RandomInitializer(num_initial_features=1)
 
-    for i in tqdm(
-        range(n_samples),
+    logger.info(f"Generating rollouts for {n_samples} samples...")
+
+    # Step a chunk of samples together. Each sample's (state, action) pairs
+    # are recorded with its index and step, then restored to sample-major
+    # order so the output matches generating one sample at a time.
+    records: list[tuple[torch.Tensor, ...]] = []
+    for start in tqdm(
+        range(0, n_samples, rollout_batch_size),
         desc="Generating AACO rollouts",
-        unit="sample",
+        unit="batch",
     ):
-        x_flat = features[i].to(device)
-        (
-            x_view,
-            feature_mask_structured,
-            masked_features_structured,
-            feature_mask_flat,
-            masked_features_flat,
-            selection_mask,
-        ) = _init_rollout_state(
-            x_flat,
-            feature_shape,
-            selection_size,
-            initializer,
-            device,
+        idx = torch.arange(
+            start, min(start + rollout_batch_size, n_samples), device=device
         )
-        # Budget counts performed actions, not initializer-provided features.
-        n_acquired = 0
-        while True:
-            # Check budget limit
-            if max_acquisitions is not None and n_acquired >= max_acquisitions:
-                # Forced stop at budget
-                all_masked_features.append(masked_features_flat.clone())
-                all_feature_masks.append(feature_mask_flat.clone())
-                all_actions.append(
-                    torch.tensor(0, device=device)
-                )  # Stop action
-                break
-
-            # Record current state
-            all_masked_features.append(masked_features_flat.clone())
-            all_feature_masks.append(feature_mask_flat.clone())
-
-            # Get AACO's action
-            action = aaco_method.act_for_instances(
-                masked_features=masked_features_flat.unsqueeze(0),
-                feature_mask=feature_mask_flat.float().unsqueeze(0),
-                selection_mask=selection_mask.unsqueeze(0),
-                feature_shape=feature_shape,
-                split_indices=torch.tensor([i], device=device),
+        x_view = features[idx.cpu()].to(device).view(len(idx), *feature_shape)
+        feature_mask = initializer.initialize(
+            features=x_view, label=None, feature_shape=feature_shape
+        ).to(device)
+        selection_mask = torch.stack(
+            [
+                _build_selection_mask(m, selection_size, feature_shape, device)
+                for m in feature_mask
+            ]
+        )
+        active = torch.arange(len(idx), device=device)
+        step = 0
+        while len(active) > 0:
+            mask = feature_mask[active]
+            masked = x_view[active] * mask.float()
+            if max_acquisitions is not None and step >= max_acquisitions:
+                action = torch.zeros(
+                    len(active), dtype=torch.long, device=device
+                )
+            else:
+                action = aaco_method.act_for_instances(
+                    masked_features=masked.flatten(1),
+                    feature_mask=mask.flatten(1).float(),
+                    selection_mask=selection_mask[active],
+                    feature_shape=feature_shape,
+                    split_indices=idx[active],
+                ).view(-1)
+            records.append(
+                (
+                    idx[active] * (n_features + 2) + step,
+                    masked.flatten(1),
+                    mask.flatten(1),
+                    action,
+                )
             )
-            action_val = action.item()
+            go = action != 0
+            rows = active[go]
+            if len(rows) > 0:
+                selection = action[go] - 1
+                selection_mask[rows, selection] = True
+                feature_mask[rows] = unmasker.unmask(
+                    masked_features=x_view[rows] * feature_mask[rows].float(),
+                    feature_mask=feature_mask[rows],
+                    features=x_view[rows],
+                    afa_selection=selection.unsqueeze(-1),
+                    selection_mask=selection_mask[rows],
+                    label=None,
+                    feature_shape=feature_shape,
+                ).to(device)
+            active = rows
+            step += 1
 
-            # Record action
-            all_actions.append(torch.tensor(action_val, device=device))
-
-            if action_val == 0:
-                # Oracle decided to stop
-                break
-
-            # Apply action (acquire the feature)
-            selection_idx = int(action_val) - 1
-            (
-                feature_mask_structured,
-                masked_features_structured,
-                feature_mask_flat,
-                masked_features_flat,
-            ) = _apply_selection(
-                selection_idx,
-                x_view=x_view,
-                selection_mask=selection_mask,
-                feature_mask_structured=feature_mask_structured,
-                masked_features_structured=masked_features_structured,
-                unmasker=unmasker,
-                feature_shape=feature_shape,
-                device=device,
-            )
-            n_acquired += 1
-
-    # Stack into tensors
-    all_masked_features = torch.stack(all_masked_features)
-    all_feature_masks = torch.stack(all_feature_masks)
-    all_actions = torch.stack(all_actions)
+    order = torch.cat([r[0] for r in records]).argsort()
+    all_masked_features = torch.cat([r[1] for r in records])[order]
+    all_feature_masks = torch.cat([r[2] for r in records])[order]
+    all_actions = torch.cat([r[3] for r in records])[order]
 
     logger.info(
         "Generated %s state-action pairs from %s samples",

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Self, final, override
+from typing import Self, cast, final, override
 
 import lightning as pl
 import torch
@@ -9,9 +9,8 @@ from torch import Tensor, nn
 from torchrl.modules import MLP
 
 from afabench.components.methods.rl.common.utils import (
-    get_feature_set,
     mask_data,
-    shuffle_feature_set,
+    observed_indices,
 )
 from afabench.components.methods.rl.jafa.custom_types import (
     Embedder,
@@ -29,6 +28,7 @@ from afabench.core.types import (
     MaskedFeatures,
 )
 from afabench.core.utils import flatten_afa_input
+from afabench.fit.step_logging import epoch_means, should_log_step
 
 
 @final
@@ -100,29 +100,38 @@ class ReadProcessEncoder(nn.Module):
             f"Expected lengths to have shape (batch_size,), instead got {lengths.shape}"
         )
 
-        batch_size, set_size, _ = input_set.shape
-        nonempty_set_mask = (lengths > 0).unsqueeze(-1)
-
         # Read: Map each set elements to a memory vector
-        memories = self.reading_block(
-            input_set
-        )  # (batch_size, set_size, memory_size)
-        valid = torch.arange(set_size, device=input_set.device).unsqueeze(
+        return self.process(self.reading_block(input_set), lengths)
+
+    def forward_indexed(
+        self, values: Tensor, indices: Tensor, lengths: Tensor
+    ) -> Tensor:
+        """Forward pass for sets of [value, onehot(index)] elements, without materializing the one-hot vectors."""
+        first, *rest = self.reading_block.children()
+        first = cast("nn.Linear", first)
+        memories = (
+            values.unsqueeze(-1) * first.weight[:, 0]
+            + F.embedding(indices, first.weight[:, 1:].T)
+            + first.bias
+        )
+        for layer in rest:
+            memories = layer(memories)
+        return self.process(memories, lengths)
+
+    def process(self, memories: Tensor, lengths: Tensor) -> Tensor:
+        """Attend over (batch_size, set_size, memory_size) memories, of which the first `lengths` are valid."""
+        batch_size, set_size, _ = memories.shape
+        nonempty_set_mask = (lengths > 0).unsqueeze(-1)
+        valid = torch.arange(set_size, device=memories.device).unsqueeze(
             0
         ) < lengths.unsqueeze(1)
         valid = valid | ~nonempty_set_mask
 
         # Initialize lstm state
-        q_t = torch.zeros(
-            batch_size, self.memory_size, device=input_set.device
-        )
-        c_t = torch.zeros(
-            batch_size, self.memory_size, device=input_set.device
-        )
+        q_t = torch.zeros(batch_size, self.memory_size, device=memories.device)
+        c_t = torch.zeros(batch_size, self.memory_size, device=memories.device)
         # Initial input
-        r_t = torch.zeros(
-            batch_size, self.memory_size, device=input_set.device
-        )
+        r_t = torch.zeros(batch_size, self.memory_size, device=memories.device)
 
         # Process: Iteratively refine state with attention over memories
         for _ in range(self.processing_steps):
@@ -178,14 +187,10 @@ class JAFAEmbedder(Embedder):
         assert masked_features.dim() == 2, (
             "masked_features and feature_mask must have 2 dimensions (batch_size, n_features)"
         )
-        feature_set, lengths = get_feature_set(
-            masked_features, feature_mask
-        )  # (batch_size, n_features, state_size)
-
         # Shuffling set should improve training
-        feature_set = shuffle_feature_set(feature_set, lengths)
-
-        return self.encoder(feature_set, lengths)
+        indices, lengths = observed_indices(feature_mask, shuffle=True)
+        values = masked_features.gather(-1, indices)
+        return self.encoder.forward_indexed(values, indices, lengths)
 
 
 @final
@@ -275,7 +280,9 @@ class LitJAFAEmbedderClassifier(pl.LightningModule):
         ).item() * (
             self.max_masking_probability - self.min_masking_probability
         )
-        self.log("masking_probability", masking_probability, sync_dist=True)
+        log_step = should_log_step(self)
+        if log_step:
+            self.log("masking_probability", masking_probability)
 
         masked_features, feature_mask, _ = mask_data(
             features, p=masking_probability
@@ -284,7 +291,8 @@ class LitJAFAEmbedderClassifier(pl.LightningModule):
         loss = F.cross_entropy(
             logits, label, weight=self.class_weight.to(logits.device)
         )
-        self.log("train_loss", loss)
+        if log_step:
+            self.log("train_loss", loss)
         return loss
 
     def _get_loss_and_acc(
@@ -306,6 +314,7 @@ class LitJAFAEmbedderClassifier(pl.LightningModule):
     def validation_step(
         self, batch: tuple[Tensor, Tensor], batch_idx: int
     ) -> None:
+        means = epoch_means(self).start_batch(len(batch[0]))
         feature_values, y = batch
 
         assert feature_values.ndim == 2, (
@@ -327,8 +336,8 @@ class LitJAFAEmbedderClassifier(pl.LightningModule):
         loss_many_observations, acc_many_observations = self._get_loss_and_acc(
             feature_values_many_observations, feature_mask_many_observations, y
         )
-        self.log("val_loss_many_observations", loss_many_observations)
-        self.log("val_acc_many_observations", acc_many_observations)
+        means.add("val_loss_many_observations", loss_many_observations)
+        means.add("val_acc_many_observations", acc_many_observations)
 
         # Mask features with maximum probability -> see few features (observations)
         feature_mask_few_observations = (
@@ -340,8 +349,16 @@ class LitJAFAEmbedderClassifier(pl.LightningModule):
         loss_few_observations, acc_few_observations = self._get_loss_and_acc(
             feature_values_few_observations, feature_mask_few_observations, y
         )
-        self.log("val_loss_few_observations", loss_few_observations)
-        self.log("val_acc_few_observations", acc_few_observations)
+        means.add("val_loss_few_observations", loss_few_observations)
+        means.add("val_acc_few_observations", acc_few_observations)
+
+    @override
+    def on_validation_epoch_end(self) -> None:
+        epoch_means(self).log(self)
+
+    @override
+    def on_fit_start(self) -> None:
+        self.class_weight = self.class_weight.to(self.device)
 
     @override
     def configure_optimizers(self):  # noqa: ANN201

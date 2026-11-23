@@ -20,6 +20,10 @@ from afabench.components.methods.static.common.static_methods import (
 from afabench.components.methods.static.common.utils import transform_dataset
 from afabench.core.utils import get_class_frequencies
 from afabench.fit.inputs import FitInputs
+from afabench.fit.tensor_batches import (
+    TensorBatchDataset,
+    passthrough_batch,
+)
 
 log = logging.getLogger(__name__)
 
@@ -100,14 +104,18 @@ def train_tabular(
         val_subset = transform_dataset(val_dataset, selected_features)
 
         train_subset_loader = DataLoader(
-            train_subset,
+            TensorBatchDataset(*train_subset.tensors),
+            collate_fn=passthrough_batch,
             batch_size=cfg.batch_size,
             shuffle=True,
             pin_memory=True,
             drop_last=True,
         )
         val_subset_loader = DataLoader(
-            val_subset, batch_size=cfg.batch_size, pin_memory=True
+            TensorBatchDataset(*val_subset.tensors),
+            collate_fn=passthrough_batch,
+            batch_size=cfg.batch_size,
+            pin_memory=True,
         )
 
         model = MLP(

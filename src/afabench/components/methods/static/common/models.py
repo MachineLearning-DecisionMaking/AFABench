@@ -72,7 +72,7 @@ class BaseModel(nn.Module):
         for epoch in range(nepochs):
             # Switch model to training mode.
             model.train()
-            epoch_train_loss = 0.0
+            epoch_train_loss = torch.zeros((), device=device)
             train_batches = 0
 
             for x_batch, y_batch in train_loader:
@@ -89,9 +89,9 @@ class BaseModel(nn.Module):
                 loss.backward()
                 opt.step()
                 model.zero_grad()
-                epoch_train_loss += loss.item()
+                epoch_train_loss += loss.detach()
 
-            train_loss = epoch_train_loss / train_batches
+            train_loss = epoch_train_loss.item() / train_batches
 
             # Calculate validation loss.
             model.eval()

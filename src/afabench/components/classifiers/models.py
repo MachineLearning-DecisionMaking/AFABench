@@ -13,6 +13,7 @@ from torchrl.modules import MLP
 from afabench.components.methods.rl.common.utils import (
     mask_data,
 )
+from afabench.fit.step_logging import epoch_means, should_log_step
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -120,7 +121,9 @@ class LitMaskedMLPClassifier(pl.LightningModule):
         ).item() * (
             self.max_masking_probability - self.min_masking_probability
         )
-        self.log("masking_probability", masking_probability, sync_dist=True)
+        log_step = should_log_step(self)
+        if log_step:
+            self.log("masking_probability", masking_probability)
 
         masked_features, feature_mask, _ = mask_data(
             features, p=masking_probability
@@ -130,7 +133,8 @@ class LitMaskedMLPClassifier(pl.LightningModule):
         loss = F.cross_entropy(
             logits, label, weight=self.class_weight.to(logits.device)
         )
-        self.log("train_loss", loss)
+        if log_step:
+            self.log("train_loss", loss)
         return loss
 
     def _get_loss_and_acc(
@@ -152,6 +156,7 @@ class LitMaskedMLPClassifier(pl.LightningModule):
     def validation_step(
         self, batch: tuple[Tensor, Tensor], batch_idx: int
     ) -> None:
+        means = epoch_means(self).start_batch(len(batch[0]))
         feature_values, y = batch
 
         # Mask features with minimum probability -> see many features (observations)
@@ -166,8 +171,8 @@ class LitMaskedMLPClassifier(pl.LightningModule):
         loss_many_observations, acc_many_observations = self._get_loss_and_acc(
             feature_values_many_observations, feature_mask_many_observations, y
         )
-        self.log("val_loss_many_observations", loss_many_observations)
-        self.log("val_acc_many_observations", acc_many_observations)
+        means.add("val_loss_many_observations", loss_many_observations)
+        means.add("val_acc_many_observations", acc_many_observations)
 
         # Mask features with maximum probability -> see few features (observations)
         feature_mask_few_observations = (
@@ -179,8 +184,16 @@ class LitMaskedMLPClassifier(pl.LightningModule):
         loss_few_observations, acc_few_observations = self._get_loss_and_acc(
             feature_values_few_observations, feature_mask_few_observations, y
         )
-        self.log("val_loss_few_observations", loss_few_observations)
-        self.log("val_acc_few_observations", acc_few_observations)
+        means.add("val_loss_few_observations", loss_few_observations)
+        means.add("val_acc_few_observations", acc_few_observations)
+
+    @override
+    def on_validation_epoch_end(self) -> None:
+        epoch_means(self).log(self)
+
+    @override
+    def on_fit_start(self) -> None:
+        self.class_weight = self.class_weight.to(self.device)
 
     @override
     def configure_optimizers(self) -> torch.optim.Optimizer:
